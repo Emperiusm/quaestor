@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 500" width="1120" height="500" role="img" aria-labelledby="t d">
+<title id="t">Quaestor relay topology</title>
+<desc id="d">Your Chrome with a signed-in ChatGPT tab connects over the Chrome DevTools Protocol on port 9222 to the chatgpt-web end, which plugs into the provider-neutral relay kernel. The kernel plugs into the opencode end, which talks HTTP on port 4096 to opencode serve, which edits the repository. The kernel independently observes the repository with its own git and runs verify commands. The owner starts, resumes and stops the relay and answers owner holds.</desc>
+<style>
+.sans{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.title{font-size:15px;font-weight:700;fill:#14202B}
+.sub{font-size:11px;fill:#56626F}
+.lbl{font-size:10.5px;fill:#56626F}
+.grp{font-size:10.5px;font-weight:600;letter-spacing:.08em}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#56626F"/></marker>
+<marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0F7B5F"/></marker>
+<marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A8620B"/></marker>
+<marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2C4FC4"/></marker>
+</defs>
+<rect x="0.75" y="0.75" width="1118.5" height="498.5" rx="14" fill="#F3F5F7" stroke="#CDD4DC" stroke-width="1.5"/>
+<text x="24" y="34" class="mono grp" fill="#0F7B5F">ORCHESTRATOR SIDE</text>
+<text x="510" y="34" class="mono grp" fill="#2C4FC4">RELAY KERNEL · NO PROVIDER IMPORTS</text>
+<text x="770" y="34" class="mono grp" fill="#A8620B">EXECUTION SIDE</text>
+<line x1="24" y1="44" x2="472" y2="44" stroke="#0F7B5F" stroke-width="2" opacity=".35"/>
+<line x1="510" y1="44" x2="730" y2="44" stroke="#2C4FC4" stroke-width="2" opacity=".35"/>
+<line x1="770" y1="44" x2="1096" y2="44" stroke="#A8620B" stroke-width="2" opacity=".35"/>
+<rect x="24" y="76" width="200" height="156" rx="8" fill="#DDF0E9" stroke="#0F7B5F" stroke-width="1.5"/>
+<text x="40" y="102" class="sans title">Your Chrome</text>
+<text x="40" y="121" class="mono sub">started by you with</text>
+<text x="40" y="136" class="mono sub">--remote-debugging-port</text>
+<rect x="38" y="150" width="172" height="66" rx="5" fill="#FFFFFF" stroke="#CDD4DC" stroke-width="1.5"/>
+<text x="50" y="171" class="mono sub" style="fill:#0F7B5F">chatgpt.com tab</text>
+<text x="50" y="188" class="mono sub">signed in once,</text>
+<text x="50" y="203" class="mono sub">never by Quaestor</text>
+<path d="M224 154 H260" stroke="#0F7B5F" stroke-width="2" fill="none" marker-start="url(#ao)" marker-end="url(#ao)"/>
+<text x="229" y="141" class="mono lbl">CDP</text>
+<text x="227" y="175" class="mono lbl">:9222</text>
+<rect x="262" y="76" width="210" height="156" rx="8" fill="#FFFFFF" stroke="#0F7B5F" stroke-width="1.5"/>
+<text x="278" y="102" class="sans title">chatgpt-web end</text>
+<text x="278" y="120" class="mono sub">relay/ends/chatgpt_web.py</text>
+<text x="278" y="146" class="mono lbl">send()    types + submits</text>
+<text x="278" y="163" class="mono lbl">receive() waits, then reads</text>
+<text x="278" y="180" class="mono lbl">holds()   reconciles</text>
+<text x="278" y="197" class="mono lbl">resume()  rebinds the thread</text>
+<text x="278" y="214" class="mono lbl">probe()   declines</text>
+<path d="M472 154 H508" stroke="#56626F" stroke-width="1.5" fill="none" marker-start="url(#a)" marker-end="url(#a)"/>
+<rect x="510" y="66" width="220" height="250" rx="8" fill="#E1E7FA" stroke="#2C4FC4" stroke-width="1.5"/>
+<text x="526" y="94" class="sans title">Relay kernel</text>
+<text x="526" y="112" class="mono sub">kernel · state · effects</text>
+<text x="526" y="127" class="mono sub">observe · packets</text>
+<line x1="526" y1="140" x2="714" y2="140" stroke="#2C4FC4" opacity=".35"/>
+<text x="526" y="160" class="mono lbl">message identity · dedup</text>
+<text x="526" y="178" class="mono lbl">bounded packets</text>
+<text x="526" y="196" class="mono lbl">secret + path redaction</text>
+<text x="526" y="214" class="mono lbl">authority gates · owner holds</text>
+<text x="526" y="232" class="mono lbl">completion corroboration</text>
+<text x="526" y="250" class="mono lbl">crash recovery</text>
+<rect x="526" y="266" width="188" height="34" rx="4" fill="#FFFFFF" stroke="#CDD4DC" stroke-width="1.5"/>
+<text x="538" y="287" class="mono lbl" style="fill:#2C4FC4">durable ledger + event log</text>
+<path d="M730 154 H768" stroke="#56626F" stroke-width="1.5" fill="none" marker-start="url(#a)" marker-end="url(#a)"/>
+<rect x="770" y="76" width="160" height="156" rx="8" fill="#FFFFFF" stroke="#A8620B" stroke-width="1.5"/>
+<text x="786" y="102" class="sans title">opencode end</text>
+<text x="786" y="120" class="mono sub">relay/ends/</text>
+<text x="786" y="135" class="mono sub">opencode.py</text>
+<text x="786" y="163" class="mono lbl">prompt_async with</text>
+<text x="786" y="180" class="mono lbl">caller-chosen id</text>
+<text x="786" y="206" class="mono lbl">assurance: DIALOGUE</text>
+<path d="M930 154 H970" stroke="#A8620B" stroke-width="2" fill="none" marker-start="url(#ae)" marker-end="url(#ae)"/>
+<text x="936" y="141" class="mono lbl">HTTP</text>
+<text x="934" y="175" class="mono lbl">:4096</text>
+<rect x="972" y="76" width="124" height="156" rx="8" fill="#F7EAD6" stroke="#A8620B" stroke-width="1.5"/>
+<text x="984" y="102" class="sans title" style="font-size:14px">opencode</text>
+<text x="984" y="119" class="sans title" style="font-size:14px">serve</text>
+<text x="984" y="140" class="mono sub">started by you</text>
+<text x="984" y="162" class="mono lbl">existing or</text>
+<text x="984" y="177" class="mono lbl">resumable</text>
+<text x="984" y="192" class="mono lbl">session</text>
+<text x="984" y="216" class="mono lbl">unconfined</text>
+<rect x="770" y="380" width="326" height="92" rx="8" fill="#E8ECF0" stroke="#56626F" stroke-width="1.5"/>
+<text x="786" y="410" class="sans title">Repository</text>
+<text x="786" y="430" class="mono sub">the authorized project</text>
+<text x="786" y="447" class="mono sub">ground truth</text>
+<path d="M1034 232 V378" stroke="#A8620B" stroke-width="2" fill="none" marker-end="url(#ae)"/>
+<text x="1042" y="312" class="mono lbl" style="fill:#A8620B">edits</text>
+<text x="1042" y="327" class="mono lbl" style="fill:#A8620B">files</text>
+<path d="M620 316 V426 H768" stroke="#2C4FC4" stroke-width="1.5" fill="none" stroke-dasharray="5 4" marker-end="url(#ak)"/>
+<text x="630" y="350" class="mono lbl" style="fill:#2C4FC4">its own git, before</text>
+<text x="630" y="365" class="mono lbl" style="fill:#2C4FC4">and after every turn</text>
+<text x="630" y="412" class="mono lbl" style="fill:#2C4FC4">--verify commands</text>
+<rect x="24" y="380" width="448" height="92" rx="8" fill="#FFFFFF" stroke="#56626F" stroke-width="1.5" stroke-dasharray="4 4"/>
+<text x="40" y="410" class="sans title">You, the owner</text>
+<text x="40" y="430" class="mono sub">quaestor relay start | status | resume | stop</text>
+<text x="40" y="447" class="mono sub">answer owner holds; grants come only from you</text>
+<path d="M472 400 H540 V318" stroke="#56626F" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+</svg>

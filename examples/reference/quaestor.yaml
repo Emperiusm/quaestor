@@ -1,0 +1,51 @@
+# REFERENCE INTEGRATION -- an example of a production monorepo consuming the platform, with the
+# stricter settings a real deployment would choose: a real executor, docker confinement, and
+# adversarial review on every security-relevant change class.
+#
+# It is an example, not a dependency. Nothing in src/ reads this file; nothing in src/
+# behaves differently because it exists. Deleting it would remove an example and change no
+# platform behaviour, which is the property the extraction had to achieve.
+project:
+  name: reference-monorepo
+  repository: ../../../reference-monorepo
+
+executor:
+  default: claude-cli
+
+workspace:
+  provider: git-worktree
+
+sandbox:
+  provider: docker
+
+commands:
+  test:
+    - python -m unittest discover -s tests -p "test_*.py"
+
+authority:
+  default:
+    - READ_ONLY
+
+review:
+  adversarial:
+    enabled: true
+    required_for:
+      - security_sensitive
+      - authentication
+      - authority_change
+      - sandbox_change
+      - deployment
+      - destructive_capability
+
+evidence:
+  require:
+    - git_head
+    - git_status
+    - git_diff
+    - test_results
+
+# Roots this deployment refuses to expose through ANY transport alias. The platform ships with
+# none -- it cannot know your machine -- so protection is opt-in and explicit.
+security:
+  protected_roots:
+    - /path/to/the/governed/repository

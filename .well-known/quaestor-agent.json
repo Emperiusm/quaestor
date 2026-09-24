@@ -1,0 +1,161 @@
+{
+  "adapter_mode_notes": [
+    "file_inbox_outbox is the executor kind `file-inbox`; stdin is the executor kind `command` (the prompt travels on STDIN and never in argv); native_claude_cli is `claude-cli`. All three are in src/quaestor/executors/registry.py KNOWN_KINDS and are dispatchable end to end.",
+    "`command` and `file-inbox` are declared non-write-capable: neither transport can prove containment, so admission refuses them a writing seat. That is a statement about what can be PROVEN, not an accusation about the agent behind them."
+  ],
+  "adapter_modes": {
+    "file_inbox_outbox": "available",
+    "native_claude_cli": "available",
+    "stdin": "available"
+  },
+  "authority_rules": {
+    "rules": [
+      "Never assume capability: the authority envelope in your prompt is the complete list of what you may do, and it is enforced outside your reach.",
+      "All requests go through the governed executor vocabulary: CLARIFICATION_REQUEST, DECISION_REQUEST, AUTHORITY_REQUEST, BLOCKER, OBSERVATION, PLAN_REVISION, RESULT, REVIEW_FINDING.",
+      "OWNER grants are human-only: an AUTHORITY_REQUEST is recorded as a request and never becomes a grant by being asked, repeated, or rephrased.",
+      "Execution modes gate everything: QUALIFICATION_ONLY (default) spawns nothing and admits only READ_ONLY; LOCAL_GOVERNED is selected locally by the operator, never by a caller.",
+      "The same rule holds in Relay Mode: an Orchestrator cannot grant capability by asserting it. A directive reaching for an effect the operator has not granted stops the relay and interrupts a human; the relay is what performs or refuses each act."
+    ],
+    "status": "available"
+  },
+  "completion_contract": {
+    "applies_to": "Program Mode runs ONLY. In Relay Mode you answer in prose -- see modes.relay.",
+    "echo_verbatim": [
+      "workflow_id",
+      "step_id",
+      "run_nonce"
+    ],
+    "notes": [
+      "prompt_disposition, program_verdict and next_authority are three INDEPENDENT questions; COMPLETE disposition is correct even when the thing you investigated failed.",
+      "claimed_files_changed must list every repository-relative path you changed or be an empty array; the orchestrator measures independently and disagreement is recorded as an error."
+    ],
+    "required_fields": [
+      "protocol",
+      "protocol_version",
+      "workflow_id",
+      "step_id",
+      "run_nonce",
+      "prompt_disposition",
+      "program_verdict",
+      "acceptance_state",
+      "authorized_scope_exhausted",
+      "continuation_allowed",
+      "next_authority",
+      "owner_decision_required",
+      "smallest_blocker",
+      "next_action",
+      "summary"
+    ],
+    "rule": "Your final message must be ONE JSON object matching the handoff schema -- no prose around it.",
+    "status": "available"
+  },
+  "docs": {
+    "operations": "docs/OPERATIONS.md",
+    "product_contract": "docs/PRD.md",
+    "relay": "docs/RELAY-MODE.md",
+    "skill": "skills/quaestor/SKILL.md",
+    "threat_model": "docs/THREAT-MODEL.md"
+  },
+  "honesty_note": "Every status field here states what exists today. Anything planned is labelled planned and must not be relied on.",
+  "modes": {
+    "note": "Quaestor has two orchestration modes. Read the one you are in before you decide how to answer: they have DIFFERENT reply contracts.",
+    "program": {
+      "doc": "docs/OPERATIONS.md",
+      "reply_contract": "The single-JSON completion_contract below.",
+      "status": "available",
+      "summary": "The state-machine mode: a program with acceptance criteria, lanes, at-most-one execution per dispatch identity, and reconciliation of claims against independently measured evidence."
+    },
+    "relationship": "Relay Mode does not run through Program Mode. The two share the same substrate: authority, evidence, repository observation and classification.",
+    "relay": {
+      "default_authority_profile": "STANDARD_EDIT",
+      "doc": "docs/RELAY-MODE.md",
+      "effect_classes": [
+        "READ_ONLY",
+        "STANDARD_EDIT",
+        "GIT_COMMIT",
+        "GIT_PUSH",
+        "DESTRUCTIVE",
+        "EXTERNAL_WRITE"
+      ],
+      "execution_kinds": [
+        "opencode"
+      ],
+      "maturity": {
+        "chatgpt-web": "LIVE_END_TO_END_QUALIFIED, not PRODUCT_SUPPORTED: there is no browser extension, no native messaging host, no installer and no signed distribution. The only browser path today is CDP against a browser the operator started themselves.",
+        "openai-chat": "LIVE_END_TO_END_QUALIFIED",
+        "opencode": "LIVE_END_TO_END_QUALIFIED"
+      },
+      "not_yet_relay_endpoints": "Claude Code and Codex are not relay endpoints in this build. They are reachable in Program Mode; they cannot be named to `relay start`.",
+      "orchestrator_kinds": [
+        "openai-chat",
+        "chatgpt-web"
+      ],
+      "reply_contract": "Natural prose. The completion_contract below does NOT apply in Relay Mode -- a bare JSON handoff object is forwarded to the counterpart as prose and helps nobody.",
+      "status": "available",
+      "summary": "A selected Orchestrator and a selected Execution Agent hold one continuous conversation; Quaestor carries every turn, observes the repository independently, and gates effects."
+    }
+  },
+  "name": "Quaestor",
+  "protocol": "AEGIS_ORCHESTRATOR_HANDOFF",
+  "protocol_version": 1,
+  "protocol_version_policy": "Major versions are refused, not best-effort parsed. An unknown major means stop and renegotiate, never guess.",
+  "summary": "AI orchestration platform: governed delegation of work to Execution Agents with independent evidence instead of self-reported success.",
+  "surfaces": {
+    "cli": {
+      "status": "available",
+      "verbs": [
+        "program create",
+        "program plan",
+        "program tick",
+        "program serve",
+        "program status",
+        "program inbox",
+        "program answer"
+      ]
+    },
+    "core_service": {
+      "note": "an authenticated loopback boundary. It exposes NAMED operations only -- there is no execute, no file read or write, and no path parameter. A client token is scoped to named projects and cannot reach another.",
+      "operations": [
+        "core.status",
+        "core.identity",
+        "projects.list",
+        "relay.list",
+        "relay.status"
+      ],
+      "protocol": "POST /rpc, bearer token, JSON",
+      "start": "quaestor serve --detach",
+      "status": "available",
+      "unauthenticated": [
+        "GET /health"
+      ]
+    },
+    "mcp_tools": {
+      "read_only": [
+        "search",
+        "fetch",
+        "orchestrator_status",
+        "orchestrator_result",
+        "program_status",
+        "program_inbox"
+      ],
+      "status": "available"
+    },
+    "relay_cli": {
+      "notes": [
+        "relay doctor measures readiness: it builds and probes both endpoints and reports what is missing, but starts no conversation.",
+        "The scripted endpoint kind `fake` exists for the control suite and is REFUSED by `relay start`: a relay reporting a finished conversation no model took part in would look exactly like a real one."
+      ],
+      "read_only": [
+        "relay status"
+      ],
+      "status": "available",
+      "verbs": [
+        "relay start",
+        "relay resume",
+        "relay status",
+        "relay doctor",
+        "relay stop"
+      ]
+    }
+  }
+}

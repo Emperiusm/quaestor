@@ -1,0 +1,35 @@
+# Synthetic qualification fixture. Deliberately NOT a real project: it exists to prove the
+# platform is generic, so it must share nothing with any particular repository.
+project:
+  name: synthetic-fixture
+  repository: ./repo
+
+executor:
+  default: fake
+
+workspace:
+  provider: git-worktree
+
+sandbox:
+  provider: none
+
+commands:
+  test:
+    - python -m unittest discover -s . -p "test_*.py"
+
+authority:
+  default:
+    - READ_ONLY
+
+review:
+  adversarial:
+    enabled: true
+    required_for:
+      - security_sensitive
+      - authority_change
+
+evidence:
+  require:
+    - git_head
+    - git_status
+    - test_results

@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use Quaestor in research, please cite it using these metadata."
+title: "Quaestor: a local-first, model-agnostic control plane for AI engineering work"
+type: software
+authors:
+  - name: "The Quaestor author"
+    email: admin@slabsofficial.com
+version: 0.1.0
+repository-code: "https://github.com/Emperiusm/quaestor"
+license: PolyForm-Noncommercial-1.0.0
+keywords:
+  - ai-agents
+  - llm
+  - orchestration
+  - coding-agents
+  - ai-governance
