@@ -25,8 +25,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
+import time
+import tracemalloc
 import unittest
 
+from tests import procsafe
 from tests.controls import control
 from tests.test_relay_kernel import RelayFixture
 
@@ -48,6 +52,87 @@ BAD_BODY = ("import sys\n"
             "sys.stderr.write('2 failed, 5 passed')\n"
             "raise SystemExit(1)\n")
 
+#: A check that starts something which OUTLIVES it and INHERITS its stdout and stderr. This is
+#: the ordinary shape -- a dev server, a file watcher, a test runner that daemonises -- not a
+#: contrived one, and it is the shape under which ``--verify-timeout`` was not a ceiling: the
+#: grandchild holds the write end of the captured pipe, so the drain that follows the kill waits
+#: on the ORPHAN. Measured on this platform before the fix: a 3s ceiling, 30.06s in the call.
+#:
+#: THE GRANDCHILD IS SPAWNED WITH NO CREATION FLAGS, AND THAT IS THE LOAD-BEARING PART. The
+#: first version of this fixture passed CREATE_NO_WINDOW to it, copying the convention the rest
+#: of the suite uses to keep console windows off the operator's desktop -- and measurement said
+#: the control had thereby stopped measuring anything: the flag gives the grandchild its OWN
+#: console, so its standard handles come from there and it never touches the check's pipe. Four
+#: variants against the pre-fix shape, one run each: grandchild plain 20.07s and 20.07s,
+#: grandchild with the flag 3.02s and 3.01s against the same 3s ceiling. No window appears
+#: anyway, because the check itself is started without one and the grandchild inherits that.
+#: THE GRANDCHILD ANNOUNCES ITSELF ON THE HANDLE IT INHERITED, and control 389 asserts that
+#: line arrived. Inheritance is the entire premise of this fixture and nothing used to check it:
+#: adding ``stdout=subprocess.DEVNULL`` to the spawn below -- ONE argument -- left every
+#: assertion green, measured against the fixed shape AND against the pre-fix shape, silently
+#: converting the control into a test of nothing. ``CHECK-STARTED`` could not catch that: the
+#: CHECK writes it, so it says nothing about who else holds the handle. A marker only a process
+#: holding the check's own stdout can deliver closes the class rather than one instance of it.
+#: argv is (grandchild script, pid file for the grandchild, pid file for the check itself,
+#: seconds the pair should live).
+GRANDCHILD_BODY = (
+    "import sys, time\n"
+    "sys.stdout.write('GRANDCHILD-HOLDS-STDOUT\\n')\n"
+    "sys.stdout.flush()\n"
+    "open(sys.argv[1], 'w').write('up')\n"
+    "time.sleep(float(sys.argv[2]))\n")
+
+SURVIVOR_BODY = (
+    "import os, subprocess, sys, time\n"
+    "up = sys.argv[2] + '.up'\n"
+    "kid = subprocess.Popen([sys.executable, sys.argv[1], up, sys.argv[4]],\n"
+    "                       shell=False)\n"
+    "open(sys.argv[2], 'w').write(str(kid.pid))\n"
+    "open(sys.argv[3], 'w').write(str(os.getpid()))\n"
+    # NOT A RACE. The check waits until the grandchild's marker is on the handle before it says
+    # anything itself, so a control reading the tail either sees both lines or fails honestly.
+    "while not os.path.isfile(up):\n"
+    "    time.sleep(0.02)\n"
+    "sys.stdout.write('CHECK-STARTED\\n')\n"
+    "sys.stdout.flush()\n"
+    "time.sleep(float(sys.argv[4]))\n")
+
+#: A check that FLOODS its output and then hangs -- the ordinary chatty shape (a server, a
+#: watcher, a test runner logging every case), and the one that broke the first fix. Removing
+#: the pipe moved the unbounded wait to an argument-less ``read()``, which loops until a read
+#: returns zero bytes; a grandchild still appending never lets that zero arrive. Reproduced by
+#: review against that shape: an 8.0s promised ceiling, still inside ``run_check`` at 42.8s, a
+#: 74 GB sink and the reviewer's free disk down from 61 GB to 1 GB.
+#:
+#: THE MARKER IS WRITTEN LAST, on purpose: finding it in the tail proves both that the whole
+#: flood reached the sink and that what came back is the END of the output rather than its
+#: beginning. argv is (how many 64 KiB blocks, seconds to hang afterwards).
+CHATTY_END_MARKER = "END-OF-THE-NOISE"
+
+CHATTY_HANG_BODY = (
+    "import sys, time\n"
+    "block = bytes([88]) * 65536\n"
+    "for _ in range(int(sys.argv[1])):\n"
+    "    sys.stdout.buffer.write(block)\n"
+    "sys.stdout.buffer.write(b'" + CHATTY_END_MARKER + "' + bytes([10]))\n"
+    "sys.stdout.buffer.flush()\n"
+    "time.sleep(float(sys.argv[2]))\n")
+
+#: A check that READS A PROMPT. With the check's stdin closed it reads end-of-file and answers
+#: at once; with stdin inherited it takes the operator's keystrokes away from the relay and then
+#: blocks on input that is never coming -- the quiet version of the same hole, and the one that
+#: costs a check which was never actually wrong.
+STDIN_READER_BODY = ("import sys\n"
+                     "data = sys.stdin.read()\n"
+                     "sys.stdout.write('STDIN-CLOSED-AFTER-%d-BYTES' % len(data))\n"
+                     "sys.stdout.write(chr(10))\n"
+                     "raise SystemExit(0)\n")
+
+#: How long the survivor and the hanging check live if nothing ends them. Long enough that the
+#: unfixed shape is unmistakable against the ceiling, short enough that a run which somehow
+#: reaches it still ends by itself rather than needing an operator.
+SURVIVOR_LIFE_S = "30"
+
 
 def write_check(root: str, name: str, body: str) -> str:
     """Put a real verification script in the project and return the command that runs it.
@@ -60,6 +145,52 @@ def write_check(root: str, name: str, body: str) -> str:
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(body)
     return '"%s" "%s"' % (sys.executable, path)
+
+
+def write_script(root: str, name: str, body: str) -> str:
+    """``write_check`` for a check that needs ARGUMENTS: returns the path, not a command line.
+
+    ``run_check`` takes an argv list as well as a string, and for these two the arguments are
+    the fixture (where to write a pid, how long to live), so the quoting question control 295
+    exists for is not the one under test here.
+    """
+    path = os.path.join(root, name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    return path
+
+
+def leaky_hang_body(secret: str, pid_prefix: str) -> str:
+    """A check that prints its loaded configuration -- credential and all -- then never finishes.
+
+    The secret is baked into the SCRIPT rather than passed as an argument, because ``command``
+    is the operator's own text echoed back and is not redacted; a control that smuggled the
+    secret in through argv would be measuring that, not the output classification it is for.
+
+    IT ALSO LEAVES A GRANDCHILD HOLDING THE SINK, which is not decoration. The temp file that
+    captures the check's RAW output -- the one copy classification never sees -- is removed on
+    the way out, and the single case where that removal CANNOT succeed is a descendant still
+    holding the handle on Windows. That is not the exotic case here, it is the shape this whole
+    module exists for, so it is the shape the control runs.
+
+    Each run writes its grandchild's pid under its OWN name: the kernel path corroborates more
+    than once, and one shared pid file would leave every run but the last unadopted and leaking.
+    """
+    return ("import os, subprocess, sys, time\n"
+            "kid = subprocess.Popen([sys.executable, '-c',\n"
+            "                        'import time; time.sleep(" + SURVIVOR_LIFE_S + ")'],\n"
+            "                       shell=False)\n"
+            "open(%r + str(os.getpid()) + '.pid', 'w').write(str(kid.pid))\n" % pid_prefix +
+            "sys.stdout.write('LOADED config api_key=%s')\n" % secret +
+            "sys.stdout.write(chr(10))\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(" + SURVIVOR_LIFE_S + ")\n")
+
+
+def read_text(path: str) -> str:
+    """Read back a small file a fixture wrote. Explicit encoding, like everything else here."""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
 
 
 class Claiming(FakeOrchestratorEnd):
@@ -1103,6 +1234,428 @@ class TestCompletionIsAClaimNotASuffix(RelayFixture):
         for i, claim in enumerate(self.CLAIMS):
             k = self.relay_that_says(claim, relay_id="relay-9lq-claim%d" % i)
             self.assertEqual(k.step().stop, kernel_mod.STOP_OBJECTIVE_COMPLETE, claim)
+class TestVerifyTimeoutIsAWallClockCeiling(RelayFixture):
+    """bd quaestor-tcb -- ``--verify-timeout`` bounds the RELAY, not just the check process.
+
+    THE FIRST VERSION OF THE DEFECT. Found by adversarial review of PR #8 and then MEASURED
+    rather than argued: ``subprocess.run(capture_output=True, timeout=...)`` kills the direct
+    child and then goes back to ``communicate()`` to drain the pipes -- and a pipe does not
+    reach end-of-file until every process holding its write end has exited. A check that leaves
+    a server, a watcher or a daemonising test runner behind hands that write end to a grandchild
+    the timeout never touched, so the call was bounded by the ORPHAN'S LIFETIME and not by the
+    operator's number: a 3.0s ceiling and 30.06s spent inside corroboration, with the relay
+    showing no stop reason and no output.
+
+    THE SECOND VERSION, WHICH THIS CLASS ALSO CARRIES BECAUSE THE FIRST FIX CREATED IT.
+    Replacing the pipe with a file removed the drain and put an argument-less ``read()`` where
+    it had been. That is ``readall``: it loops until a read returns zero bytes, and a grandchild
+    still APPENDING to the handle it inherited never lets that zero arrive. Reviewed and
+    reproduced against the first fix: an 8.0s promised ceiling, still inside ``run_check`` at
+    42.8s, a 74 GB sink file, and free disk down from 61 GB to 1 GB -- strictly worse than what
+    it replaced, which was at least bounded by the orphan's lifetime. So "there is no pipe" was
+    never the property worth asserting. "Nothing here waits on the WRITER" is.
+
+    THE CEILING IS READ OFF THE CLOCK, AND IT TRACKS THE OPERATOR'S NUMBER. Timing one run under
+    a wide roof cannot tell an enforced ceiling from one that ignores the flag: measured against
+    the first version of these controls, hard-coding ``timeout_s=3.0`` inside ``run_check`` AND
+    separately spending 4x the operator's number both stayed green, because the accepted slack
+    was nearly 4x the ceiling being policed. So the same check now runs at TWO ceilings and the
+    DIFFERENCE in elapsed time is asserted against the difference in the numbers, which is the
+    only shape that can fail for both.
+
+    WHAT IS DELIBERATELY NOT CLAIMED: the descendants are not killed. Ending them means walking
+    a parent-pid tree or signalling a process group, and ``procsafe.kill_argv`` records what
+    happened the last time this project reached for either. So control 389 asserts the opposite
+    of the comfortable thing -- the grandchild is still ALIVE when the ceiling is met -- and
+    asserts that the result says so, and that the pid it names is the CHECK'S OWN. Cleanup is
+    ``procsafe.Fleet``'s: what this fixture caused to exist, it ends, one process at a time,
+    and reports any leak.
+    """
+
+    #: Slack ``ceiling_for`` allows for interpreter start-up on a loaded box. Deliberately
+    #: SMALLER than the smallest ceiling these controls run at, because slack wider than the
+    #: quantity under test is how a mutant that spent 12.0s against a 3.0s ceiling stayed green.
+    CEILING_SLACK_S = 1.5
+
+    #: 24 MiB of check output before it hangs. Large enough that reading ALL of it is plainly
+    #: visible in this process's allocation peak, small enough to be a temp file and not an
+    #: incident.
+    CHATTY_BLOCKS = 384
+    CHATTY_SINK_BYTES = 384 * 65536
+
+    def ceiling_for(self, timeout_s: float) -> float:
+        """The whole promise: the operator's number plus the grace a killed check gets reaped in.
+
+        THE GRACE IS READ AND THEN PINNED, which is the part the first version of this helper had
+        backwards. Its docstring claimed that deriving the bound from ``KILL_GRACE_S`` meant a
+        change to that constant "cannot silently widen the ceiling these controls accept" --
+        deriving it is exactly what lets the bound move WITH the constant. Measured:
+        ``KILL_GRACE_S = 5.0`` -> ``300.0`` left both controls green while the ceiling an
+        operator can compute became 303s for a 3s check. So the arithmetic stays the module's
+        own, and the constant is asserted to be small, which is the assertion that fails there.
+        """
+        self.assertLessEqual(corroborate_mod.KILL_GRACE_S, 10.0,
+                             "the grace a killed check gets was widened to %.1fs, so the "
+                             "ceiling the module promises an operator moved with it"
+                             % corroborate_mod.KILL_GRACE_S)
+        return float(timeout_s) + corroborate_mod.KILL_GRACE_S + self.CEILING_SLACK_S
+
+    def claiming(self, *, relay_id, **cfg):
+        """The scripted relay control 300 drives: an Orchestrator that declares victory at once.
+
+        Spelled out here rather than inherited from the class that already has one, because
+        inheriting that class would re-run its ten controls under this one's name.
+        """
+        k = kernel_mod.RelayKernel(
+            st=self.state, orchestrator=Claiming(replies=[]),
+            execution=FakeExecutionEnd(replies=["did the work", "did more", "did more still"]),
+            project_root=self.repo, relay_id=relay_id,
+            config=kernel_mod.RelayConfig(objective="fixture objective",
+                                          authority_profile="STANDARD_EDIT", **cfg))
+        k.start()
+        return k
+
+    def project_tree(self) -> list:
+        """Everything at the top of the project. The check's output file must never appear here.
+
+        Both the module docstring and ``_run_bounded`` say the sink lives in the system temp
+        directory and never under the project, "whose movement is itself evidence this relay
+        reads", and nothing measured it. Measured now, because the consequence is real: adding
+        ``dir=cwd`` to the ``mkstemp`` call leaves a stray ``quaestor-check-*.out`` in the tree
+        in exactly this scenario -- the surviving grandchild holds the handle, the unlink fails
+        and is swallowed -- and corroboration reads that tree as evidence.
+        """
+        return sorted(os.listdir(self.repo))
+
+    def run_survivor(self, fleet, *, timeout_s: float, tag: str) -> dict:
+        """Run the survivor check once under ``timeout_s``; assert everything except the clock.
+
+        Returns the elapsed seconds so the CALLER can compare two runs at two different
+        ceilings. One run can only show that the call finished under a roof; two show that the
+        operator's number is what the call is bounded BY.
+        """
+        work = fleet.temp_dir("quaestor-tcb-%s-" % tag)
+        pidfile = os.path.join(work, "grandchild.pid")
+        selffile = os.path.join(work, "check.pid")
+        kid_script = write_script(self.repo, "grandchild_%s.py" % tag, GRANDCHILD_BODY)
+        script = write_script(self.repo, "check_leaves_a_survivor_%s.py" % tag, SURVIVOR_BODY)
+        argv = [sys.executable, script, kid_script, pidfile, selffile, SURVIVOR_LIFE_S]
+        before = self.project_tree()
+
+        began = time.time()
+        v = corroborate_mod.verdict(project_root=self.repo, checks=(argv,), timeout_s=timeout_s)
+        elapsed = time.time() - began
+
+        # OWNED BEFORE IT IS ASSERTED ON. The adoption is not an assertion, so it happens first
+        # and a control that FAILS below still ends what it caused to exist -- which is the
+        # whole reason the fleet is here rather than a try/finally in each test.
+        self.assertTrue(os.path.isfile(pidfile),
+                        "the check never got as far as spawning a grandchild, so this control "
+                        "measured a ceiling nothing was pushing against")
+        kid = int(read_text(pidfile).strip())
+        fleet.adopt(kid, "grandchild left holding the check's stdout")
+
+        # THE ASSERTION. Not "the payload says it was killed" -- the clock. Asserted before the
+        # liveness reading below so that a real regression reports the ceiling it blew rather
+        # than the grandchild that had by then run out its own life.
+        self.assertLess(elapsed, self.ceiling_for(timeout_s),
+                        "corroboration ran %.2fs against a %.1fs ceiling: the call is bounded "
+                        "by something other than the operator's number" % (elapsed, timeout_s))
+        # ...and it did not simply refuse to run: the ceiling was actually spent.
+        self.assertGreater(elapsed, timeout_s - 0.5,
+                           "corroboration returned in %.2fs from a %.1fs ceiling, so the "
+                           "operator's number is not what it waited on" % (elapsed, timeout_s))
+
+        # THE SINK IS NOT IN THE PROJECT, and this is the scenario that would leave it there.
+        self.assertEqual(self.project_tree(), before,
+                         "the run left files in the project it is supposed to be measuring")
+
+        c = v["checks"][0]
+        # THE CONTROL IS NOT VACUOUS ONLY IF SOMETHING REALLY SURVIVED...
+        self.assertTrue(fleet.alive(kid),
+                        "the grandchild was already gone, so nothing held the handle")
+        # ...AND ONLY IF WHAT SURVIVED REALLY HOLDS THE CHECK'S OWN STDOUT. Only a process that
+        # inherited that handle can put this line in the result; ``CHECK-STARTED`` below is the
+        # CHECK's own and proves nothing about the grandchild.
+        self.assertIn("GRANDCHILD-HOLDS-STDOUT", c["tail"],
+                      "the grandchild's marker never reached the result, so it does not hold "
+                      "the check's stdout and this control is measuring nothing")
+        self.assertIn("CHECK-STARTED", c["tail"])
+
+        # A killed check is never a measured one, and the verdict falls to UNMEASURABLE.
+        self.assertEqual(v["state"], corroborate_mod.UNMEASURABLE)
+        self.assertNotEqual(v["state"], corroborate_mod.CORROBORATED)
+        self.assertTrue(c["timed_out"])
+        self.assertFalse(c["measured"])
+        self.assertFalse(c["ok"])
+
+        # IT NAMES WHAT IT ENDED, BY IDENTITY. "A pid that is dead and is not the orphan" was
+        # satisfied by every dead pid on the machine: measured, reporting ``pid + 1`` (Windows
+        # pids advance in fours, so pid+1 is reliably dead) passed. The check writes its OWN pid
+        # down, so the result is compared against the process that actually ran.
+        self.assertIsInstance(c["killed"], dict)
+        check_pid = int(read_text(selffile).strip())
+        self.assertEqual(int(c["killed"]["pid"]), check_pid,
+                         "the result named pid %s; the check that ran was pid %s"
+                         % (c["killed"]["pid"], check_pid))
+        self.assertNotEqual(int(c["killed"]["pid"]), kid)
+        self.assertFalse(fleet.alive(int(c["killed"]["pid"])),
+                         "the result named a pid it killed and that process is still alive")
+        # ...and it says the other half out loud, because "killed" alone reads as a promise that
+        # nothing of the check survives -- which is exactly what did not happen here.
+        self.assertIn("NOT killed", c["error"])
+        return {"elapsed": elapsed, "kid": kid, "check": c, "verdict": v}
+
+    def sink_is_read_under_a_budget(self):
+        """The second version of the defect: no pipe, but an unbounded read of a growing file.
+
+        WHAT IS MEASURED HERE IS ALLOCATION, NOT THE CLOCK, AND THAT IS A CHOICE. The review's
+        reproduction was a grandchild writing 64 KiB blocks to the inherited handle as fast as
+        it could -- 42.8s inside an 8.0s ceiling, 74 GB written. That shape is REFUSED as a
+        control: it is a race the writer has to keep winning, and losing it once on a slower box
+        fills the operator's disk instead of failing a test. The DEFECT is not a race. An
+        argument-less ``read()`` pulls the whole file in, so a check that produced 24 MiB moves
+        24 MiB through this process whether anything is still appending or not, and the loop
+        that cannot terminate against a live writer is the same code path. Measured directly:
+        peak 25.3 MB with ``fh.read()``, 0.07 MB with the budget.
+
+        WHAT IT KILLS AND WHAT IT CANNOT, STATED RATHER THAN IMPLIED. It kills the shape that
+        shipped -- the whole sink pulled into memory -- measured at 48.0 MB against this 24 MiB
+        fixture. It would NOT catch a variant that kept the seek and then read to the end
+        anyway: on a file nobody is writing to, that returns the same 64 KiB. Separating those
+        two requires a writer that outruns the reader, which is the race refused above, so the
+        seam is held by ``read(n)`` with ``buffering=0`` and by the reason recorded beside it in
+        ``_run_bounded`` -- not by this control.
+        """
+        timeout_s = 2.0
+        script = write_script(self.repo, "check_floods_then_hangs.py", CHATTY_HANG_BODY)
+        argv = [sys.executable, script, str(self.CHATTY_BLOCKS), SURVIVOR_LIFE_S]
+
+        tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            began = time.time()
+            v = corroborate_mod.verdict(project_root=self.repo, checks=(argv,),
+                                        timeout_s=timeout_s)
+            elapsed = time.time() - began
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        c = v["checks"][0]
+        # NON-VACUITY FIRST. The marker is written after the last block, so finding it proves
+        # the sink really did hold 24 MiB -- and that what came back is the END of the output.
+        self.assertIn(CHATTY_END_MARKER, c["tail"],
+                      "the check never finished flooding the sink, so nothing here was "
+                      "measured against a large file")
+        self.assertLess(peak, 4 * 1024 * 1024,
+                        "reading the check's output cost %.1f MB of this process against a "
+                        "%.1f MB sink: the read is bounded by the WRITER and not by a budget, "
+                        "which against a check that keeps writing does not terminate at all"
+                        % (peak / 1048576.0, self.CHATTY_SINK_BYTES / 1048576.0))
+        self.assertLess(elapsed, self.ceiling_for(timeout_s))
+        self.assertEqual(v["state"], corroborate_mod.UNMEASURABLE)
+        self.assertTrue(c["timed_out"])
+
+    def a_check_that_reads_stdin_gets_eof(self):
+        """``stdin=DEVNULL`` was claimed as a fix in the commit message and measured by nothing.
+
+        Measured now: with the descriptor closed the check reads end-of-file and answers well
+        inside the ceiling. With stdin inherited it takes the operator's keystrokes away from
+        the relay and then blocks on input that is never coming, so the ceiling kills a check
+        that was never actually wrong.
+
+        THE ONE CONDITION THIS NEEDS: the process running the suite must have a standard input
+        that does not end by itself. From a terminal, or under any parent holding the pipe open,
+        the inherited-stdin mutant blocks and is killed and this fails. Run with stdin already
+        at end-of-file, the mutant reads EOF too and this cannot see it -- so green here is a
+        proof only where the harness has a real stdin, and never a false alarm.
+        """
+        timeout_s = 8.0
+        check = write_check(self.repo, "check_reads_stdin.py", STDIN_READER_BODY)
+        began = time.time()
+        v = corroborate_mod.verdict(project_root=self.repo, checks=(check,),
+                                    timeout_s=timeout_s)
+        elapsed = time.time() - began
+
+        c = v["checks"][0]
+        self.assertEqual(v["state"], corroborate_mod.CORROBORATED)
+        self.assertTrue(c["measured"])
+        self.assertTrue(c["ok"])
+        self.assertFalse(c["timed_out"])
+        self.assertIn("STDIN-CLOSED-AFTER-0-BYTES", c["tail"])
+        # Not merely "finished under the roof": it never went near the ceiling, which is what
+        # separates "read EOF at once" from "blocked until the deadline killed it".
+        self.assertLess(elapsed, timeout_s / 2.0,
+                        "the check spent %.2fs of an %.1fs ceiling on a standard input that "
+                        "should have been closed to it" % (elapsed, timeout_s))
+
+    @control(389)
+    def test_the_ceiling_is_wall_clock_tracks_the_number_and_waits_on_no_writer(self):
+        """The defect, reproduced three ways: a survivor, a flood, and a prompt."""
+        with procsafe.Fleet(deadline_s=300.0) as fleet:
+            # THE SINKS LAND WHERE THIS FLEET CAN REMOVE THEM. ``mkstemp`` with no ``dir``
+            # honours ``tempfile.tempdir``, and the survivor scenario is precisely the one whose
+            # sink CANNOT be unlinked -- the grandchild still holds the handle -- so a control
+            # left pointing at the operator's own %TEMP% drops a file there on every run. They
+            # are empty now rather than credentials, and a control that litters is still a
+            # control that litters.
+            was_tempdir = tempfile.tempdir
+            tempfile.tempdir = fleet.temp_dir("quaestor-tcb-sinks-")
+            try:
+                short = self.run_survivor(fleet, timeout_s=2.0, tag="short")
+                longer = self.run_survivor(fleet, timeout_s=7.0, tag="long")
+
+                # THE OPERATOR'S NUMBER IS WHAT BOUNDS THE CALL. Same check, same survivor, two
+                # ceilings 5.0s apart: the elapsed times must be that far apart too. A ceiling
+                # that ignores the flag spends the same time twice, and one that overshoots by
+                # a factor blows the larger run's own bound.
+                self.assertGreaterEqual(longer["elapsed"] - short["elapsed"], 4.0,
+                                        "a 2.0s ceiling took %.2fs and a 7.0s ceiling took "
+                                        "%.2fs: the elapsed time does not track the operator's "
+                                        "number" % (short["elapsed"], longer["elapsed"]))
+
+                self.sink_is_read_under_a_budget()
+                self.a_check_that_reads_stdin_gets_eof()
+            finally:
+                tempfile.tempdir = was_tempdir
+
+        # THE FIXTURE ENDS WHAT IT STARTED. One process at a time, never a tree.
+        report = fleet.cleanup_report
+        self.assertEqual(report["leaked"], [], "this control leaked processes")
+        for row in (short, longer):
+            self.assertFalse(fleet.alive(row["kid"]),
+                             "the grandchild outlived the fixture that caused it")
+
+    @control(390)
+    def test_a_killed_check_never_passes_and_its_output_is_classified_before_it_travels(self):
+        """The timeout path used to carry NO output, so nothing had to be classified on it.
+
+        It carries output now -- which an operator needs, because "it hung" is not actionable
+        without knowing how far it got -- and that makes it a new way out for the same secret
+        control 300 closed on the measured path. THREE destinations, not one: the durable event
+        log, the message ledger, and a blocker sentence sent to a REMOTE provider. So this drives
+        the KERNEL the way control 300 does, instead of reading ``verdict``'s own return value
+        and calling that the record.
+
+        A FOURTH DESTINATION EXISTS AND IS THE ONLY ONE CLASSIFICATION NEVER SEES: the temp file
+        the output is captured in. It is removed on the way out -- except in precisely the case
+        this module is built for, where a surviving descendant holds the handle and the unlink
+        fails. Reviewed and measured: 26 orphaned ``quaestor-check-*.out`` files in one session's
+        %TEMP%, one of them holding a plaintext ``sk-ant-...`` key. So the sink is emptied before
+        it is unlinked, and this control reads back whatever the run left behind.
+        """
+        timeout_s = 2.0
+        secret = "sk-ant-api03-" + "A" * 40
+        with procsafe.Fleet(deadline_s=300.0) as fleet:
+            work = fleet.temp_dir("quaestor-tcb-390-")
+            check = write_check(self.repo, "check_prints_then_hangs.py",
+                                leaky_hang_body(secret, os.path.join(work, "kid-")))
+
+            # THE SINK IS STEERED SOMEWHERE THIS CONTROL CAN READ IT. ``mkstemp`` with no ``dir``
+            # honours ``tempfile.tempdir``, so pointing that at a directory this fleet owns reads
+            # back exactly what THIS run left -- not another lane's temp files -- and leaves
+            # nothing behind in the operator's own temp directory when the unlink fails.
+            def adopt_every_grandchild():
+                """Take ownership of every survivor this run has produced SO FAR.
+
+                Called between the phases and again from the ``finally``, never once at the end:
+                a phase that raises before its grandchild is owned leaves a process holding the
+                fixture's own repository open, and the failure the operator then reads is a
+                tearDown that could not remove a directory.
+                """
+                found = []
+                for name in sorted(os.listdir(work)):
+                    if not name.startswith("kid-"):
+                        continue
+                    pid = int(read_text(os.path.join(work, name)).strip())
+                    found.append(pid)
+                    if pid not in fleet.owned:
+                        fleet.adopt(pid, "grandchild holding the leaky check's sink")
+                return found
+
+            was_tempdir = tempfile.tempdir
+            tempfile.tempdir = work
+            try:
+                began = time.time()
+                v = corroborate_mod.verdict(project_root=self.repo, checks=(check,),
+                                            timeout_s=timeout_s)
+                elapsed = time.time() - began
+                adopt_every_grandchild()
+
+                k = self.claiming(relay_id="relay-killed-check", completion_checks=(check,),
+                                  check_timeout_s=timeout_s, completion_attempt_limit=5)
+                k.step()      # the claim is refused; the killed check's output is captured
+                k.step()      # the directive still reaches the agent
+                k.step()      # the agent's answer carries the blocker back to the Orchestrator
+            finally:
+                tempfile.tempdir = was_tempdir
+                kids = adopt_every_grandchild()
+
+            self.assertTrue(kids, "no check got as far as leaving a grandchild, so the sink "
+                                  "was never held open and the leak below is untested")
+
+            c = v["checks"][0]
+            self.assertLess(elapsed, self.ceiling_for(timeout_s))
+            # NEVER A PASS. The check was not slow-but-fine; it was never allowed to answer.
+            self.assertEqual(v["state"], corroborate_mod.UNMEASURABLE)
+            self.assertNotEqual(v["state"], corroborate_mod.CORROBORATED)
+            self.assertTrue(c["timed_out"])
+            self.assertFalse(c["ok"])
+            self.assertFalse(c["measured"])
+            self.assertIsNone(c["exit_code"])
+
+            # IT REALLY DID PRODUCE OUTPUT -- so the redaction assertions are about redacting
+            # and not about an empty string, which is how this control could look green while
+            # measuring nothing.
+            self.assertIn("LOADED config", c["tail"])
+            self.assertNotIn(secret, c["tail"])
+            self.assertTrue(c["redacted"])
+            line = corroborate_mod.blocker_line(v)
+            self.assertNotIn(secret, line)
+            self.assertIn("LOADED config", line)
+            # And the Orchestrator is told the check was KILLED, not merely that it failed:
+            # partial output without that reads as a real failure to go and fix.
+            self.assertIn("was killed", line)
+
+            # THE THREE DESTINATIONS THE REGISTRATION NAMES, REACHED THROUGH THE KERNEL.
+            events = self.state.events(k.relay_id, limit=0)
+            for ev in events:
+                self.assertNotIn(secret, repr(ev.get("payload")), "leaked into the event log")
+            for row in self.state.messages(k.relay_id, limit=0):
+                self.assertNotIn(secret, repr(row), "leaked into the message ledger")
+            to_orch = "\n".join(t for _mid, t in k.orchestrator.sent)
+            self.assertNotIn(secret, to_orch, "leaked to the remote Orchestrator")
+
+            # NON-VACUITY FOR ALL THREE: the killed check's output really did travel this route,
+            # and the redaction is visible rather than silent.
+            claims = [ev["payload"] for ev in events
+                      if ev["kind"] == "relay.completion.claim"]
+            self.assertTrue(claims, "the kernel never recorded a completion claim, so nothing "
+                                    "above was measured against the durable record")
+            self.assertEqual(claims[0]["state"], corroborate_mod.UNMEASURABLE)
+            self.assertIn("LOADED config", claims[0]["checks"][0]["tail"])
+            self.assertIn("secret-withheld", claims[0]["checks"][0]["tail"])
+            self.assertIn("LOADED config", to_orch)
+
+            # THE FOURTH DESTINATION: the raw sink, the one copy nothing classifies. On Windows
+            # the grandchild's handle makes the unlink fail, so a file is left -- and what it
+            # must contain is nothing at all.
+            left = [os.path.join(work, n) for n in os.listdir(work)
+                    if n.startswith("quaestor-check-")]
+            if os.name == "nt":
+                self.assertTrue(left, "no sink survived the run, so the emptying this asserts "
+                                      "was never exercised on the platform where it matters")
+            for path in left:
+                with open(path, "rb") as fh:
+                    body = fh.read()
+                self.assertEqual(len(body), 0,
+                                 "the raw, unclassified sink survived this run holding %d "
+                                 "bytes (carries the credential: %s)"
+                                 % (len(body), secret.encode("utf-8") in body))
+
+        report = fleet.cleanup_report
+        self.assertEqual(report["leaked"], [], "this control leaked processes")
 
 
 if __name__ == "__main__":
