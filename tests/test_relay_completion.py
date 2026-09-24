@@ -15,6 +15,14 @@ TWO CORRECTNESS HOLES, BOTH FOUND BY A LIVE RUN RATHER THAN BY REASONING.
    that the healthy case is retried under a bound, and -- the part that must never regress --
    that the retry touches only the RECEIVE, so bounded recovery can never duplicate a delivery.
 
+3. THE PUSH THE OBSERVATION GATE COULD NOT SEE (bd quaestor-q00). Observation recorded only
+   ``git rev-parse @{upstream}`` and derived GIT_PUSH from a change in that one value, so a push
+   was INVISIBLE whenever the branch had no tracking configuration, went to a second remote, or
+   went to a ref the branch does not track. Controls 387-388 push for real, into real remote
+   repositories, in each of those configurations -- and, because the wider reading's FIRST
+   version stopped the relay on ``git fetch`` and on ``git checkout -b``, they also pin the
+   ordinary acts that must stay QUIET, with a real fetch from a real peer clone.
+
 Every fixture is a real git repository and every check is a real subprocess, because a control
 that stubbed either would be testing the stub. Control 295 exists because the first version of
 the splitter passed a quoted argument through WITH its quotes, so a check that should have
@@ -28,12 +36,15 @@ import sys
 import unittest
 
 from tests.controls import control
-from tests.test_relay_kernel import RelayFixture
+from tests.test_relay_kernel import RelayFixture, _git
 
+from quaestor.core import authority as auth_mod
 from quaestor.core import owner_channel
 from quaestor.relay import contracts
 from quaestor.relay import corroborate as corroborate_mod
+from quaestor.relay import effects as effects_mod
 from quaestor.relay import kernel as kernel_mod
+from quaestor.relay import observe as observe_mod
 from quaestor.relay import state as state_mod
 from quaestor.relay.contracts import (END_FAILED, END_IDLE, FROM_ORCHESTRATOR,
                                       ROLE_ORCHESTRATOR, EndStatus, RelayMessage)
@@ -1103,6 +1114,398 @@ class TestCompletionIsAClaimNotASuffix(RelayFixture):
         for i, claim in enumerate(self.CLAIMS):
             k = self.relay_that_says(claim, relay_id="relay-9lq-claim%d" % i)
             self.assertEqual(k.step().stop, kernel_mod.STOP_OBJECTIVE_COMPLETE, claim)
+def _without_refs(snap) -> dict:
+    """The same reading as a build that predates the ref-store reading would have written.
+
+    Not a convenience: ``kernel._before_reading`` replays a PERSISTED before-snapshot after a
+    restart, so on the first turn following an upgrade this is the exact shape the classifier
+    receives on one side. It is also how these controls REPRODUCE the defect instead of merely
+    describing it -- the same two real readings, minus the new fields, classify as they did
+    before the fix.
+    """
+    out = dict(snap or {})
+    for key in ("refs_read_ok", "remote_refs_digest", "local_refs_digest", "remote_ref_count",
+                "remote_tip_objects", "local_tip_objects", "ref_tips_complete",
+                "fetch_head_digest", "fetch_head_read_ok"):
+        out.pop(key, None)
+    return out
+
+
+def _without_tips(snap) -> dict:
+    """The ref DIGESTS with none of the evidence that says what a move MEANT.
+
+    This is the first version of the wider reading: it saw that a remote-tracking ref had moved
+    and called every such move a push, and saw that a local ref had moved and called every such
+    move a commit. Keeping it here is how the controls below MEASURE the second defect -- a real
+    ``git fetch`` and a real ``git checkout -b`` classify one way now and the other way then --
+    instead of asserting the new answer against nothing.
+    """
+    out = dict(snap or {})
+    for key in ("remote_tip_objects", "local_tip_objects", "ref_tips_complete",
+                "fetch_head_digest", "fetch_head_read_ok"):
+        out.pop(key, None)
+    return out
+
+
+class TestPushObservationBeyondUpstream(RelayFixture):
+    """The observation gate is the check that still works against an UNCONFINED agent, and PR #13
+    made its authority refusal a durable owner hold. A push the gate cannot SEE is a push no hold
+    is ever raised for -- so these controls are about the reading, not about the hold.
+    """
+
+    def real_remote(self, name: str) -> str:
+        """A real git repository to push INTO, its HEAD parked on a branch nothing pushes to.
+
+        A local repository reached by path is a REAL remote: push resolves the refspec,
+        transfers objects and updates this repository's ``refs/remotes/*`` through the same code
+        that runs over the network, which is the behaviour under test. A mocked git would have
+        been a test of the mock's opinion about what a push does.
+
+        Parking HEAD is what lets an ordinary checkout accept every push here --
+        ``receive.denyCurrentBranch`` guards only the branch the remote has checked out -- and it
+        keeps this fixture from naming a flag ``check_static.py`` treats as a permission-bypass
+        literal, which is a gate no control gets to widen for its own convenience.
+        """
+        path = os.path.join(self.home, name)
+        os.makedirs(path, exist_ok=True)
+        for args in (["init", "-q", "."], ["symbolic-ref", "HEAD", "refs/heads/parked"]):
+            r = _git(args, path)
+            self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+        return path.replace("\\", "/")
+
+    def snap(self) -> dict:
+        s = observe_mod.snapshot(self.repo)
+        self.assertTrue(s["probe_ok"], s.get("probe_error"))
+        return s
+
+    def push(self, *args):
+        r = _git(["push", "-q", *args], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+
+    def assert_push_seen(self, before, after, why):
+        """Seen NOW, and provably UNSEEN by the reading this bead replaced."""
+        self.assertEqual(effects_mod.observed_effect_class(before, after),
+                         effects_mod.GIT_PUSH, why)
+        self.assertEqual(
+            effects_mod.observed_effect_class(_without_refs(before), _without_refs(after)),
+            effects_mod.READ_ONLY,
+            "%s -- the upstream-only reading was supposed to be blind here; if it is not, this "
+            "control is no longer measuring the defect" % why)
+
+    @control(387)
+    def test_a_push_to_any_ref_is_observed_not_only_to_the_tracked_one(self):
+        """Three real pushes, none of which moves ``@{upstream}``.
+
+        MUTATION THIS CATCHES: drop the remote-tracking ref comparison from
+        ``observed_effect_class`` and every one of these intervals reads READ_ONLY -- a real push
+        classified as a turn that did nothing, under a profile that grants no push.
+        """
+        origin = self.real_remote("origin-remote")
+        second = self.real_remote("second-remote")
+        _git(["remote", "add", "origin", origin], self.repo)
+        _git(["remote", "add", "second", second], self.repo)
+
+        # -- (1) NO TRACKING CONFIGURATION AT ALL. The most plausible state for a fresh agent
+        #        branch, and the one where the old reading answered "" on BOTH sides.
+        before = self.snap()
+        self.assertFalse(before["upstream_read_ok"],
+                         "fixture invalid: this case requires a branch with no upstream")
+        self.push("origin", "HEAD:refs/heads/trunk")
+        after = self.snap()
+        self.assertEqual(before["upstream_head"], after["upstream_head"],
+                         "a push with no tracking branch cannot move the tracked ref -- "
+                         "that is the blind spot, and it must still be here")
+        self.assertEqual(before["head"], after["head"], "a push is not a commit")
+        self.assert_push_seen(before, after, "push with no tracking configuration")
+
+        # And the FULL gate, not just the classifier: an ungranted push is refused by name and
+        # names the capability an owner would have to decide, which is what makes it a hold.
+        gate = effects_mod.gate_observation(before, after, profile=auth_mod.STANDARD_EDIT,
+                                            owner_grants=(), now=100.0,
+                                            channel_state="AUTHENTICATED")
+        self.assertFalse(gate.allowed, "an observed push under STANDARD_EDIT was allowed")
+        self.assertEqual(gate.hold, effects_mod.HOLD_OBSERVED_UNGRANTED_EFFECT)
+        self.assertIn(auth_mod.CAP_GIT_PUSH, gate.required)
+
+        # AND THE ACCOUNT THE ORCHESTRATOR IS ACTUALLY GIVEN. The gate refusing is not the whole
+        # deliverable: ``kernel.step`` sets ``result.observation`` from ``delta``, records it
+        # durably, and hands ``summarise(delta)`` to the Orchestrator as the independent reading.
+        # A push that the delta never reports and the text never mentions is a push neither the
+        # record nor the Orchestrator ever sees -- and both halves survived their own deletion
+        # until this was asserted here.
+        d = observe_mod.delta(before, after)
+        self.assertTrue(d["refs_measured"])
+        self.assertTrue(d["remote_refs_moved"], "the delta must report the push it measured")
+        self.assertIn("REMOTE-TRACKING ref moved", observe_mod.summarise(d))
+
+        # -- (2) A SECOND REMOTE, while the branch tracks the first. The commit is made BEFORE
+        #        the interval opens, so the only thing this interval contains is the push.
+        _git(["branch", "--set-upstream-to=origin/trunk"], self.repo)
+        self.touch("more.txt", "work")
+        _git(["add", "-A"], self.repo)
+        _git(["commit", "-qm", "work"], self.repo)
+        before = self.snap()
+        self.assertTrue(before["upstream_read_ok"], "this case requires a tracking branch")
+        self.push("second", "HEAD:refs/heads/trunk")
+        after = self.snap()
+        self.assertEqual(before["upstream_head"], after["upstream_head"],
+                         "pushing elsewhere must not move the tracked ref -- else the fixture "
+                         "is not exercising the blind spot")
+        self.assertEqual(before["head"], after["head"])
+        self.assert_push_seen(before, after, "push to a second remote")
+
+        # -- (3) A REF THE BRANCH DOES NOT TRACK, on the remote it does track.
+        before = self.snap()
+        self.push("origin", "HEAD:refs/heads/not-the-tracked-one")
+        after = self.snap()
+        self.assertEqual(before["upstream_head"], after["upstream_head"])
+        self.assert_push_seen(before, after, "push to a non-tracking refspec")
+
+        # -- (4) A DELETE-PUSH removes a remote ref. A ref that DISAPPEARS is as much a push as
+        #        one that moves, and comparing only known ref names would miss it.
+        before = self.snap()
+        self.push("origin", ":refs/heads/not-the-tracked-one")
+        after = self.snap()
+        self.assertLess(after["remote_ref_count"], before["remote_ref_count"])
+        self.assert_push_seen(before, after, "delete-push")
+
+        # -- (5) A PUSH OF A COMMIT THAT IS NOT A REF TIP HERE. Telling a push from a fetch asks
+        #        whether the object the remote ref landed on was ALREADY HELD, and ``HEAD~1`` is
+        #        held without being any ref's tip -- so that question alone answers "fetch" here,
+        #        and this interval is a real push classified as nothing. What stops it is the
+        #        second fact: no fetch ran, so FETCH_HEAD did not move, so nothing excuses the
+        #        remote ref that did.
+        before = self.snap()
+        self.push("origin", "HEAD~1:refs/heads/older")
+        after = self.snap()
+        self.assertEqual(before["head"], after["head"])
+        self.assert_push_seen(before, after, "push of a commit that is not a local ref tip")
+
+    def peer_clone(self, origin: str, branch: str) -> str:
+        """A SECOND repository that pushes to ``origin``, so this one can really FETCH.
+
+        A fetch cannot be staged inside one checkout: something else has to move the remote
+        first. This is the cheapest honest way to get a ``refs/remotes/*`` ref to move for a
+        reason that is not a push from the repository under observation.
+        """
+        path = os.path.join(self.home, "peer")
+        for args, cwd in ((["clone", "-q", "-b", branch, origin, path], self.home),
+                          (["config", "user.email", "control@example.invalid"], path),
+                          (["config", "user.name", "Control"], path)):
+            r = _git(args, cwd)
+            self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+        return path
+
+    @control(388)
+    def test_the_ref_reading_fails_closed_and_stays_quiet_on_ordinary_work(self):
+        """A wider reading is only worth having if it refuses when it cannot read, and stays
+        silent for the ordinary acts of an ordinary turn. Both, plus the local-ref half of the
+        same blind spot, and the two acts the first version of this reading stopped the relay on.
+
+        MUTATIONS THIS CATCHES, each applied and measured:
+          * ``observe.snapshot``: ``refs_read_ok = bool(refs.ok)`` -> ``True``. The fail-closed
+            claim used to rest entirely on a dict the test wrote itself, so hard-coding the flag
+            at its source left both controls green while a real failed reading classified
+            READ_ONLY and was ALLOWED. Clause (c2) takes a REAL snapshot with only the
+            ``for-each-ref`` child failing.
+          * ``observed_effect_class``: put the fail-closed test back INSIDE the comparability
+            test. A failed read opposite a pre-upgrade snapshot then falls through to the
+            upstream comparison and answers READ_ONLY -- fail-open across exactly the upgrade
+            boundary the fallback exists for. Clause (c) pairs both.
+          * ``_local_ref_written`` -> ``return True``: ``git checkout -b`` becomes a run-ending
+            hold again. ``_remote_move_is_push`` -> ``return True``: every ``git fetch`` does.
+          * dropping ``+ caveat`` from the BUSY return of ``summarise`` -- the branch a real
+            agent turn produces, and the one clause (g) now pins.
+
+        WHY THE UNREADABLE CASE IS INJECTED AND NOT STAGED: measured on this platform, every
+        portable way to make git's ref store unreadable (a corrupted ``.git/packed-refs``) also
+        fails ``rev-parse HEAD`` and ``git status``, so it lands on the OLDER refusal
+        (``probe_ok`` False) and never reaches this branch at all. A garbage loose ref, a ref
+        pointing at a missing object and a ``.git/refs`` replaced by a file all leave
+        ``for-each-ref`` at rc 0. The reachable failure is that one child timing out or failing
+        to exec, so that is the one child clause (c2) fails -- everything else in the snapshot
+        stays real.
+        """
+        # (a) NO REMOTES AT ALL is a real repository state, and it must not look like a failed
+        #     read. sha256 of an empty ref list is a long hex string; a failed read records "".
+        clean = self.snap()
+        self.assertTrue(clean["refs_read_ok"])
+        self.assertEqual(clean["remote_ref_count"], 0)
+        self.assertTrue(clean["remote_refs_digest"],
+                        "an empty remote-ref set must still digest to a value, or 'no remotes' "
+                        "and 'could not read the refs' become the same reading")
+
+        # (b) A QUIET TURN IS STILL QUIET. Two independent readings of an untouched repository
+        #     must agree, or the new reading would hold the relay on every turn.
+        self.assertEqual(effects_mod.observed_effect_class(clean, self.snap()),
+                         effects_mod.READ_ONLY)
+
+        # (c) UNREADABLE IS NOT UNMOVED -- in every direction, since either side can fail and
+        #     either side can predate the reading.
+        blind = dict(clean)
+        blind["refs_read_ok"] = False
+        blind["remote_refs_digest"] = ""
+        blind["local_refs_digest"] = ""
+        blind["ref_tips_complete"] = False
+        blind_both = dict(blind)
+        old_build = _without_refs(clean)
+        # (clean, blind) and (blind, clean) are the one-sided failures; (blind, blind) is the
+        # interval where the ref store was unreadable throughout, and it is the one that would
+        # otherwise LOOK CLEAN -- two failed reads compare equal to each other. The last two are
+        # the UPGRADE BOUNDARY: a side that took the reading and FAILED it, opposite a snapshot
+        # written before the reading existed. Nothing about the other side makes a failed read
+        # measurable, and asking comparability first said otherwise.
+        for b, a in ((clean, blind), (blind, clean), (blind, blind_both),
+                     (old_build, blind), (blind, old_build)):
+            self.assertEqual(effects_mod.observed_effect_class(b, a), "",
+                             "an unreadable ref store was read as evidence of no push")
+            gate = effects_mod.gate_observation(b, a, profile=auth_mod.STANDARD_EDIT,
+                                                owner_grants=(), now=100.0,
+                                                channel_state="AUTHENTICATED")
+            self.assertFalse(gate.allowed)
+            self.assertEqual(gate.hold, effects_mod.HOLD_OBSERVATION_UNMEASURABLE)
+
+        # (c2) AND THE FLAG IS REALLY WIRED TO A REAL FAILED READ. Everything above is a dict
+        #      this test wrote, so it proves the classifier and proves nothing about the reading
+        #      that feeds it. Here only the ``for-each-ref`` child fails -- probe, HEAD, status,
+        #      diff, upstream and FETCH_HEAD are all still real git.
+        real_run_git = observe_mod.gitmod.run_git
+
+        def only_for_each_ref_fails(args, **kw):
+            if list(args)[:1] == ["for-each-ref"]:
+                return observe_mod.gitmod.GitResult(127, "", "injected: the child did not run")
+            return real_run_git(args, **kw)
+
+        observe_mod.gitmod.run_git = only_for_each_ref_fails
+        try:
+            unread = observe_mod.snapshot(self.repo)
+        finally:
+            observe_mod.gitmod.run_git = real_run_git
+        self.assertTrue(unread["probe_ok"], "only the ref child was supposed to fail")
+        self.assertFalse(unread["refs_read_ok"], "a failed for-each-ref must set the flag "
+                                                 "the whole fail-closed contract reads")
+        self.assertEqual(unread["remote_refs_digest"], "")
+        self.assertEqual(unread["local_refs_digest"], "")
+        self.assertFalse(unread["ref_tips_complete"])
+        self.assertEqual(effects_mod.observed_effect_class(clean, unread), "")
+        self.assertEqual(
+            effects_mod.gate_observation(clean, unread, profile=auth_mod.STANDARD_EDIT,
+                                         owner_grants=(), now=100.0,
+                                         channel_state="AUTHENTICATED").hold,
+            effects_mod.HOLD_OBSERVATION_UNMEASURABLE)
+        self.assertIn("push cannot be ruled out",
+                      observe_mod.summarise(observe_mod.delta(clean, unread)))
+
+        # (d) A SNAPSHOT FROM BEFORE THIS READING EXISTED falls back to the old comparison
+        #     rather than inventing a push out of a field it never carried. That case is real:
+        #     the kernel replays a persisted before-reading across a restart.
+        self.assertEqual(effects_mod.observed_effect_class(old_build, self.snap()),
+                         effects_mod.READ_ONLY)
+
+        # (e) THE LOCAL HALF, and the question it has to ask. A ref that moved while HEAD stood
+        #     still is only a commit-class act if something was WRITTEN. A lightweight tag and
+        #     ``git checkout -b`` write one ref file and no object at all -- and this repository's
+        #     own CLAUDE.md tells agents to branch first, so calling that GIT_COMMIT ended runs.
+        before = self.snap()
+        _git(["tag", "control-388"], self.repo)
+        _git(["checkout", "-q", "-b", "control-388-branch"], self.repo)
+        after = self.snap()
+        self.assertEqual(before["head"], after["head"], "neither act may move HEAD")
+        self.assertNotEqual(before["local_refs_digest"], after["local_refs_digest"],
+                            "fixture invalid: two local refs were supposed to appear")
+        self.assertEqual(effects_mod.observed_effect_class(before, after),
+                         effects_mod.STANDARD_EDIT,
+                         "a ref pointed at a commit that already existed wrote NO OBJECT -- and "
+                         "it did write a ref, so it is not a turn that did nothing either")
+        self.assertTrue(
+            effects_mod.gate_observation(before, after, profile=auth_mod.STANDARD_EDIT,
+                                         owner_grants=(), now=100.0,
+                                         channel_state="AUTHENTICATED").allowed,
+            "creating a branch stopped a relay running the ordinary profile")
+        self.assertFalse(
+            effects_mod.gate_observation(before, after, profile=auth_mod.READ_ONLY,
+                                         owner_grants=(), now=100.0,
+                                         channel_state="AUTHENTICATED").allowed,
+            "a READ_ONLY relay whose agent created a branch must still be held -- answering "
+            "READ_ONLY here would be the quiet lie, not the narrow truth")
+        self.assertEqual(
+            effects_mod.observed_effect_class(_without_tips(before), _without_tips(after)),
+            effects_mod.GIT_COMMIT,
+            "the digest-only reading was supposed to call this a commit; if it no longer does, "
+            "this control has stopped measuring the defect it exists for")
+
+        # ... while an ANNOTATED tag writes a real tag object, and that IS commit-class -- seen
+        #     here and invisible to the HEAD comparison this whole reading was added to widen.
+        ann_before = self.snap()
+        _git(["tag", "-a", "control-388-annotated", "-m", "writes an object"], self.repo)
+        ann_after = self.snap()
+        self.assertEqual(ann_before["head"], ann_after["head"], "the tag must not move HEAD")
+        self.assertEqual(effects_mod.observed_effect_class(ann_before, ann_after),
+                         effects_mod.GIT_COMMIT)
+        self.assertEqual(
+            effects_mod.observed_effect_class(_without_refs(ann_before),
+                                              _without_refs(ann_after)),
+            effects_mod.READ_ONLY, "the HEAD-only reading was supposed to be blind here")
+
+        # (f) A REAL FETCH IS NOT A PUSH. A peer clone moves the remote; this repository only
+        #     reads it. The ref store REALLY moves -- so the digest comparison alone said
+        #     GIT_PUSH, and a refused observation gate is not a question, it is
+        #     ``_finish(STOP_OWNER_HOLD)`` on a hold whose missing capability the profile lacks,
+        #     which no owner grant can discharge. An ordinary fetch must not end a relay.
+        origin = self.real_remote("fetch-origin")
+        _git(["remote", "add", "origin", origin], self.repo)
+        self.push("origin", "HEAD:refs/heads/trunk")
+        peer = self.peer_clone(origin, "trunk")
+        with open(os.path.join(peer, "peer.txt"), "w", encoding="utf-8") as fh:
+            fh.write("peer work\n")
+        for args in (["add", "-A"], ["commit", "-qm", "peer work"],
+                     ["push", "-q", "origin", "HEAD:refs/heads/trunk"]):
+            r = _git(args, peer)
+            self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+
+        before = self.snap()
+        r = _git(["fetch", "-q", "origin"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+        after = self.snap()
+        self.assertTrue(observe_mod.delta(before, after)["remote_refs_moved"],
+                        "fixture invalid: the fetch was supposed to move a remote-tracking ref")
+        self.assertEqual(effects_mod.observed_effect_class(before, after),
+                         effects_mod.STANDARD_EDIT,
+                         "a fetch writes nothing to the REMOTE -- and it did write here")
+        fetch_gate = effects_mod.gate_observation(before, after, profile=auth_mod.STANDARD_EDIT,
+                                                  owner_grants=(), now=100.0,
+                                                  channel_state="AUTHENTICATED")
+        self.assertTrue(fetch_gate.allowed, "an ordinary fetch stopped the relay")
+        self.assertEqual(
+            effects_mod.observed_effect_class(_without_tips(before), _without_tips(after)),
+            effects_mod.GIT_PUSH,
+            "the digest-only reading was supposed to call this a push; if it no longer does, "
+            "this control has stopped measuring the defect it exists for")
+
+        # (g) AND THE ACCOUNT THE ORCHESTRATOR IS GIVEN says so. A summary that reported NO
+        #     CHANGE over an interval whose ref store was never read would be the same lie one
+        #     clause quieter -- and so would the BUSY sentence, which is the one a real agent
+        #     turn produces and the one that used to carry no caveat at all.
+        d = observe_mod.delta(clean, blind)
+        self.assertFalse(d["refs_measured"])
+        self.assertFalse(d["remote_refs_moved"], "unread must not be reported as moved")
+        self.assertIn("NO CHANGE", observe_mod.summarise(d))
+        self.assertIn("push cannot be ruled out", observe_mod.summarise(d))
+        busy = dict(after)
+        busy["refs_read_ok"] = False
+        busy["changed_paths"] = ["busy.txt"]
+        busy["status_digest"] = "a different digest"
+        busy_text = observe_mod.summarise(observe_mod.delta(before, busy))
+        self.assertIn("busy.txt", busy_text)
+        self.assertNotIn("NO CHANGE", busy_text)
+        self.assertIn("push cannot be ruled out", busy_text)
+
+        moved = observe_mod.delta(before, after)
+        self.assertTrue(moved["refs_measured"])
+        self.assertIn("REMOTE-TRACKING ref moved", observe_mod.summarise(moved))
+        local = observe_mod.delta(ann_before, ann_after)
+        self.assertTrue(local["local_refs_moved"])
+        self.assertIn("local ref moved", observe_mod.summarise(local))
 
 
 if __name__ == "__main__":

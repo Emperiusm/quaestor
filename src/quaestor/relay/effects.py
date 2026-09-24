@@ -242,6 +242,57 @@ def gate_directive(text: str, *, profile: str, owner_grants: Sequence[Mapping] =
                           "ungranted": list(d.ungranted), "source": req.source})
 
 
+def _ref_tips(m: Mapping) -> tuple:
+    """(remote tips, local tips, usable) out of one snapshot. PURE.
+
+    ``usable`` is False for a snapshot written by a build that carried no tip sets, and for one
+    whose ref store was too large to carry them (``observe.REF_TIP_CAP``). Both make every
+    caller below answer WIDE -- the reading this one narrowed -- rather than quiet, because a
+    half-known set of "objects this repository already held" answers a confident NO for every id
+    that is missing from it, and that particular NO is what turns a real push into a quiet turn.
+    """
+    remote = frozenset(str(x) for x in (m.get("remote_tip_objects") or ()))
+    local = frozenset(str(x) for x in (m.get("local_tip_objects") or ()))
+    return remote, local, bool(m.get("ref_tips_complete"))
+
+
+def _fetched(b: Mapping, a: Mapping) -> bool:
+    """Did a FETCH run inside this interval. PURE.
+
+    ``git fetch`` rewrites ``FETCH_HEAD``; ``git push`` never touches it. Unread on either side
+    answers False -- "no fetch to explain this" -- which keeps the fallback pointing at GIT_PUSH.
+    """
+    if not (b.get("fetch_head_read_ok") and a.get("fetch_head_read_ok")):
+        return False
+    return str(b.get("fetch_head_digest") or "") != str(a.get("fetch_head_digest") or "")
+
+
+def _remote_move_is_push(b: Mapping, a: Mapping) -> bool:
+    """A remote-tracking ref moved. Was that a push FROM here, or a fetch INTO here. PURE."""
+    rb, lb, ub = _ref_tips(b)
+    ra, _la, ua = _ref_tips(a)
+    if not (ub and ua):
+        return True
+    # A PUSH CAN ONLY SEND AN OBJECT THIS REPOSITORY ALREADY HELD. A remote-tracking ref that now
+    # points at one of those is push evidence and no fetch explains it away.
+    if (ra - rb) & (rb | lb | {str(b.get("head") or "")}):
+        return True
+    # Everything else -- only brand-new objects arrived, or a remote ref VANISHED -- is a push
+    # unless a fetch actually ran here. A delete-push and a ``fetch --prune`` leave the same ref
+    # store; only FETCH_HEAD tells them apart, and with no fetch to point at, this answers push.
+    return not _fetched(b, a)
+
+
+def _local_ref_written(b: Mapping, a: Mapping) -> bool:
+    """A local ref moved. Was anything WRITTEN, or was a ref pointed at what was already here.
+    PURE."""
+    rb, lb, ub = _ref_tips(b)
+    _ra, la, ua = _ref_tips(a)
+    if not (ub and ua):
+        return True
+    return bool(la - (rb | lb | {str(b.get("head") or "")}))
+
+
 #: What an observed repository change IMPLIES was performed. Ordered most severe first: a push
 #: that also committed is reported as a push.
 def observed_effect_class(before: Mapping, after: Mapping) -> str:
@@ -249,17 +300,118 @@ def observed_effect_class(before: Mapping, after: Mapping) -> str:
 
     Reads only fields both snapshots carry, and treats a MISSING measurement as unknown rather
     than as "no change": ``probe_ok=False`` on either side yields "" so a failed probe can never
-    be mistaken for a clean repository.
+    be mistaken for a clean repository. So does a ref reading that was TAKEN AND FAILED, on
+    either side -- and that question is asked BEFORE the two sides are checked for
+    comparability, because a side that failed its reading is unmeasurable no matter what the
+    other side carries. Asked in the other order, a failed read opposite a PRE-UPGRADE snapshot
+    fell through to the upstream comparison and answered READ_ONLY: fail-OPEN, inside the one
+    contract whose entire claim is that it fails closed.
+
+    THE PUSH EVIDENCE IS THE WHOLE REMOTE-TRACKING REF SET, not ``@{upstream}``. Deriving a push
+    from that one value made a push INVISIBLE in three ordinary configurations, each measured
+    against a real repository and a real second remote: a branch with no tracking configuration
+    (the value is "" on both sides of a real push), a push to a second remote, and a push to a
+    ref name the branch does not track.
+
+    BUT A MOVED REMOTE-TRACKING REF IS NOT YET A PUSH, and the first version of this reading said
+    it was. ``git fetch`` moves those refs too, and calling a fetch GIT_PUSH is not the cheap
+    over-report it looks like: ``kernel.step`` turns a refused observation gate into
+    ``_finish(STOP_OWNER_HOLD)``, and ``core.authority.require`` answers OWNER_REQUIRED for a
+    capability the PROFILE lacks BEFORE any owner grant is consulted -- so a false push ENDS THE
+    RELAY with a hold that no owner decision can discharge and that every resume re-raises. Two
+    local facts separate the acts:
+
+      * a PUSH can only send an object this repository ALREADY HELD, so a remote-tracking ref
+        landing on an object that was a ref tip here before the turn is push evidence;
+      * a FETCH rewrites ``FETCH_HEAD`` and a push never touches it, so remote-ref movement that
+        brought only objects this repository did not have, in an interval where FETCH_HEAD also
+        changed, is a fetch.
+
+    Anything else that moved a remote-tracking ref -- a ref that VANISHED (a delete-push), a move
+    with no fetch to explain it, a snapshot with no usable tip sets -- is still reported as a
+    push. Under-reporting costs the gate, so every fallback here points at GIT_PUSH.
+
+    THE SAME QUESTION ON THE LOCAL HALF. A local ref that moved while HEAD stood still was
+    GIT_COMMIT outright, justified by naming ``git branch -f`` and ``git tag`` -- which write NO
+    OBJECT AT ALL when they name a commit that already exists. Measured, that made ``git checkout
+    -b`` (which this repository's own CLAUDE.md instructs agents to perform) a run-ending,
+    undischargeable hold. So the local half asks the same "moved to WHAT" question: GIT_COMMIT
+    only when the after side holds a local ref tip that this repository did not already have --
+    ``git stash``, an ANNOTATED tag, a commit onto a branch that is not checked out, an imported
+    object.
+
+    BUT NOT READ_ONLY EITHER. A ref that merely POINTED at something already present still wrote
+    a ref file, and so did the fetch that moved a remote-tracking ref without pushing anything.
+    Those land on STANDARD_EDIT: allowed under the profile an ordinary relay runs with, so
+    branching and fetching stop nothing, and still HELD under READ_ONLY, where an agent that
+    created a branch or fetched a remote has done something a read-only relay does not grant.
+    Calling them READ_ONLY would have been the quiet answer and would have widened the tag hole
+    named below from "allowed under GIT_COMMIT" to "allowed under everything".
+
+    WHAT IT STILL CANNOT SEE, stated rather than papered over.
+
+      * Only the namespaces the remote's fetch refspec MIRRORS into ``refs/remotes/*`` leave a
+        trace. Measured against a real bare remote: ``git tag v1 && git push origin --tags``
+        lands ``refs/tags/v1`` on the remote and moves nothing under ``refs/remotes/*``, so the
+        interval reads GIT_COMMIT if the annotated tag object was written in it, STANDARD_EDIT
+        if only the tag ref appeared, and READ_ONLY if the tag already existed -- each of them
+        ALLOWED under the profile that grants it, and none of them naming the push. ``git push
+        origin HEAD:refs/for/main`` (gerrit), notes, and any other unmirrored ref name are the
+        same. A push straight to a URL, or to a remote whose fetch refspec has been removed,
+        updates NOTHING here. Only ``git ls-remote`` could answer these, and it would put a
+        network round trip inside a reading that runs on every turn.
+      * An interval that BOTH fetches and pushes, where the pushed object was not a ref tip here
+        beforehand, reads as the fetch: both facts above are true at once and the quieter one
+        wins.
+      * A DELETED local ref reads STANDARD_EDIT, not DESTRUCTIVE, even though deleting an
+        unmerged branch can lose work. ``EFFECT_CLASSES`` is a fixed vocabulary shared with
+        Program Mode and nothing here can tell a merged branch from an unmerged one, so deriving
+        DESTRUCTIVE from ref evidence would stop a relay on every ``git branch -d``.
     """
     b, a = dict(before or {}), dict(after or {})
     if not (b.get("probe_ok") and a.get("probe_ok")):
         return ""
-    if str(b.get("upstream_head") or "") != str(a.get("upstream_head") or "") \
+    # FAIL CLOSED FIRST, before comparability. A side that TOOK the ref reading and FAILED it is
+    # unmeasurable whatever the other side is, INCLUDING opposite a pre-upgrade snapshot -- and
+    # the kernel replays exactly such a persisted before-reading after a restart.
+    if ("refs_read_ok" in b and not b["refs_read_ok"]) \
+            or ("refs_read_ok" in a and not a["refs_read_ok"]):
+        return ""
+    # THE REF READING HAS THREE STATES, not two.
+    #   both sides read it        -> compare, and ask what the movement means.
+    #   either side FAILED it     -> "" -- refused above. A reading that answered "no push" for
+    #                                an unreadable ref store would convert a refusal into a pass,
+    #                                which is the whole defect this function was written around.
+    #   either side never took it -> a snapshot from a build older than this reading. It falls
+    #                                back to the upstream comparison -- what that build would
+    #                                have done -- rather than stranding every resumed relay on an
+    #                                UNMEASURABLE stop that names no capability and that
+    #                                therefore no owner grant can discharge.
+    refs_comparable = ("refs_read_ok" in b) and ("refs_read_ok" in a)
+    # A ref moved for a reason that is neither a push nor an object write -- a fetch, a branch
+    # created at an existing commit, a deleted ref. Not a push, not a commit, NOT NOTHING.
+    ref_edit = False
+    if refs_comparable:
+        if str(b.get("remote_refs_digest") or "") != str(a.get("remote_refs_digest") or ""):
+            if _remote_move_is_push(b, a):
+                return GIT_PUSH
+            ref_edit = True
+    elif str(b.get("upstream_head") or "") != str(a.get("upstream_head") or "") \
             and a.get("upstream_head"):
+        # ONLY on the fallback path. ``@{upstream}`` is itself a ``refs/remotes/*`` ref in every
+        # ordinary configuration, so when the ref store WAS read it has already been judged
+        # above, with evidence this comparison does not have -- re-asking it here would reinstate
+        # the fetch-is-a-push false alarm for the one branch that happens to be tracked.
         return GIT_PUSH
     if str(b.get("head") or "") != str(a.get("head") or ""):
         return GIT_COMMIT
-    if str(b.get("status_digest") or "") != str(a.get("status_digest") or "") \
+    if refs_comparable \
+            and str(b.get("local_refs_digest") or "") != str(a.get("local_refs_digest") or ""):
+        if _local_ref_written(b, a):
+            return GIT_COMMIT
+        ref_edit = True
+    if ref_edit \
+            or str(b.get("status_digest") or "") != str(a.get("status_digest") or "") \
             or str(b.get("diff_sha256") or "") != str(a.get("diff_sha256") or ""):
         return STANDARD_EDIT
     return READ_ONLY
