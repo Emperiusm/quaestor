@@ -65,6 +65,19 @@ UNRECONCILABLE = "UNRECONCILABLE"
 #: delivered it with no grant and no re-gating.
 OWNER_HELD = "OWNER_HELD"
 
+#: The only states a message may be CLAIMED FOR DELIVERY from. ``undelivered`` hands out exactly
+#: these, so a row in any other state has already been claimed, held or resolved by somebody and
+#: ``begin_delivery`` refuses to take it a second time. One tuple, read by both, because a queue
+#: and a claim that disagree about what is deliverable is how the same message goes twice.
+CLAIMABLE_FOR_DELIVERY = (OBSERVED, REDELIVERABLE)
+
+#: What reconciliation must resolve before a resumed relay may move anything. UNRECONCILABLE is
+#: in here because it is an UNRESOLVED delivery, not a settled one: reading only DELIVERING meant
+#: the next resume found nothing to reconcile, blanked the reason it was parked on and re-stopped
+#: for a generic NO_PROGRESS, so the one row a human still had to decide about stopped being
+#: visible as such.
+UNRESOLVED_DELIVERY = (DELIVERING, UNRECONCILABLE)
+
 #: The ``relay`` columns a READER actually reads off a row -- ``summarise`` takes
 #: ``awaiting_role`` and ``awaiting_message_id`` straight out of it. ``_migrate`` is how a
 #: WRITER repairs a store an older build left short of them. A reader cannot migrate, so
@@ -470,13 +483,26 @@ class RelayState:
         self._conn.commit()
         return cur.rowcount > 0
 
-    def begin_delivery(self, relay_id: str, message_id: str, *, delivery_id: str) -> None:
-        """Write the intent to deliver BEFORE the send. This row is the crash evidence."""
+    def begin_delivery(self, relay_id: str, message_id: str, *, delivery_id: str) -> bool:
+        """CLAIM a message and write the intent to deliver BEFORE the send. This row is the
+        crash evidence. Returns whether this writer won the claim. Impure.
+
+        COMPARE-AND-SWAP, IN ONE STATEMENT, for the reason ``resume_running`` is one. A blind
+        UPDATE wrote this row whatever it already said, and nothing anywhere excluded a second
+        process on the same state home -- a resume raced against a relay that is still alive, two
+        operators, a service restarted while the old one was mid-send. The loser used to overwrite
+        the winner's delivery id and then send the same message again, which is the ONE failure
+        this whole ledger exists to prevent. So the claim applies only while the row still stands
+        in a state ``undelivered`` would hand out, and a writer that loses is TOLD it lost instead
+        of discovering it by having written.
+        """
+        places = ",".join("?" for _ in CLAIMABLE_FOR_DELIVERY)
         with self._conn:
-            self._conn.execute(
+            cur = self._conn.execute(
                 "UPDATE relay_message SET delivery_state=?, delivery_id=? "
-                "WHERE relay_id=? AND message_id=?",
-                (DELIVERING, delivery_id, relay_id, message_id))
+                "WHERE relay_id=? AND message_id=? AND delivery_state IN (%s)" % places,
+                (DELIVERING, delivery_id, relay_id, message_id, *CLAIMABLE_FOR_DELIVERY))
+        return bool(cur.rowcount)
 
     def complete_delivery(self, relay_id: str, message_id: str, *, native_id: str = "",
                           state: str = DELIVERED) -> None:
@@ -493,13 +519,36 @@ class RelayState:
                 (state, relay_id, message_id))
 
     def pending_deliveries(self, relay_id: str) -> list:
-        """Rows left mid-delivery by a crash. These are UNCERTAIN, not undelivered."""
-        return self._all("SELECT * FROM relay_message WHERE relay_id=? AND delivery_state=? "
-                         "ORDER BY exchange_no", (relay_id, DELIVERING))
+        """Every delivery left UNRESOLVED by a crash. These are UNCERTAIN, not undelivered.
+
+        UNRECONCILABLE rows are returned too -- see ``UNRESOLVED_DELIVERY``. A row nobody could
+        answer for is still an open question; it merely has "nobody could say" recorded as its
+        last answer, and a question is not closed by having failed once. Asked again on the next
+        resume it either gets an answer -- the endpoint the operator just fixed -- or stops the
+        relay by its own name instead of letting the resume walk past it.
+        """
+        places = ",".join("?" for _ in UNRESOLVED_DELIVERY)
+        return self._all("SELECT * FROM relay_message WHERE relay_id=? AND delivery_state IN "
+                         "(%s) ORDER BY exchange_no" % places, (relay_id, *UNRESOLVED_DELIVERY))
 
     def undelivered(self, relay_id: str) -> list:
+        places = ",".join("?" for _ in CLAIMABLE_FOR_DELIVERY)
         return self._all("SELECT * FROM relay_message WHERE relay_id=? AND delivery_state IN "
-                         "(?,?) ORDER BY exchange_no", (relay_id, OBSERVED, REDELIVERABLE))
+                         "(%s) ORDER BY exchange_no" % places,
+                         (relay_id, *CLAIMABLE_FOR_DELIVERY))
+
+    def reply_to(self, relay_id: str, message_id: str) -> dict | None:
+        """The turn recorded as the answer to ``message_id``, if one was ever recorded.
+
+        The delivery ledger answers "was this handed over?" and the awaiting marker answers "is
+        this relay still waiting?"; neither answers "did the reply already land?" -- which is
+        exactly the question a crash between recording a reply and clearing the marker leaves
+        behind. It is read from ``causal_parent``, written by the kernel in the same statement
+        that records the reply, so the answer is a fact about that row rather than a second flag
+        that can disagree with it.
+        """
+        return self._one("SELECT * FROM relay_message WHERE relay_id=? AND causal_parent=? "
+                         "ORDER BY exchange_no, observed_at LIMIT 1", (relay_id, message_id))
 
     def delivered_ids(self, relay_id: str) -> set:
         rows = self._all("SELECT message_id FROM relay_message WHERE relay_id=? AND "

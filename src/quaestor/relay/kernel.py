@@ -68,6 +68,10 @@ STOP_ORCHESTRATOR_DISCONNECT = "ORCHESTRATOR_DISCONNECTED"
 STOP_EXECUTION_DISCONNECT = "EXECUTION_DISCONNECTED"
 STOP_OWNER_HOLD = "OWNER_HOLD"
 STOP_UNRECONCILABLE = "UNRECONCILABLE_DELIVERY"
+#: Another writer already claimed this delivery, so this one did not send. NOT a disconnect: the
+#: endpoint was never asked, and naming it as one would send an operator to restart a provider
+#: that is perfectly healthy.
+STOP_DELIVERY_CLAIM_LOST = "DELIVERY_CLAIMED_ELSEWHERE"
 STOP_START_REFUSED = "START_REFUSED"
 STOP_OPERATOR = "STOPPED_BY_OPERATOR"
 #: The Orchestrator kept claiming completion and independent measurement kept disagreeing. This
@@ -677,7 +681,23 @@ class RelayKernel:
         target_role = COUNTERPART[row["direction"]]
         end = self._end_for(target_role)
         delivery_id = uuid.uuid4().hex[:12]
-        self.state.begin_delivery(self.relay_id, row["message_id"], delivery_id=delivery_id)
+        if not self.state.begin_delivery(self.relay_id, row["message_id"],
+                                         delivery_id=delivery_id):
+            # SOMEBODY ELSE HOLDS THIS DELIVERY. The queue is read before the claim -- it has to
+            # be -- so another process can take the row in between, and a writer that sent anyway
+            # would hand the same message over twice. The send does NOT happen, and the loss is
+            # reported by name.
+            current = self.state.seen(self.relay_id, row["message_id"]) or {}
+            lost = {"error": "this delivery is claimed by another writer; the row now reads %s "
+                             "and was not taken a second time"
+                             % (current.get("delivery_state") or "an unreadable state"),
+                    "role": target_role, "claim_lost": True,
+                    "delivery_state": str(current.get("delivery_state") or ""),
+                    "held_by": str(current.get("delivery_id") or "")}
+            self._event("relay.delivery.claim_lost",
+                        {"message_id": row["message_id"], "to": target_role,
+                         "refused_delivery_id": delivery_id, **lost})
+            return False, lost
         self._event("relay.delivering", {"message_id": row["message_id"], "to": target_role,
                                          "delivery_id": delivery_id,
                                          "exchange_no": row["exchange_no"]})
@@ -700,7 +720,60 @@ class RelayKernel:
                                         "exchange_no": row["exchange_no"]})
         return True, {"native_id": receipt.native_id, "role": target_role}
 
+    def _close_awaited_turn(self) -> None:
+        """Clear the outstanding-turn marker. Impure.
+
+        CALLED ONLY ONCE THE REPLY IS IN THE DURABLE RECORD, never merely once it is in hand.
+        This marker names the one thing a killed relay cannot reconstruct: which message it was
+        waiting on, and at which endpoint. Cleared before the reply was written -- which is what
+        ``step`` used to do, a sanitiser and two gates before the row existed -- a crash in that
+        window destroyed both halves at once: the ledger held no reply and the row had nothing
+        left to wait for, so the resumed relay found an empty queue, stopped NO_PROGRESS, and the
+        agent's finished turn stayed uncollectable at an endpoint that was still holding it.
+
+        The opposite window is survivable, and that is the whole reason for this order: a crash
+        with the reply recorded and the marker still standing is recognised on the next step --
+        the ledger already answers "did the reply land?" -- and closed there.
+        """
+        self.state.update(self.relay_id, awaiting_message_id="", awaiting_native_id="",
+                          awaiting_role="", last_activity_at=self._now())
+
     # -- recovery -------------------------------------------------------------------------------
+    def _adopt_confirmed_delivery(self, row: Mapping, target_role: str) -> bool:
+        """Take up the outstanding turn a CONFIRMED delivery leaves behind. Impure.
+
+        The endpoint says it already holds this message, so the exchange really happened: the
+        send landed, and this relay died before it could record either the acknowledgement or
+        the wait that always follows one. Confirming the row alone finished the delivery and left
+        NOTHING outstanding -- so the very next step found an empty queue and stopped for no
+        progress, permanently, because every later resume reached that same empty queue, while
+        the endpoint sat holding a reply nobody would ever come back for. A reconciliation that
+        confirms is a delivery that succeeded, and it must leave the relay exactly where a
+        succeeding delivery leaves it.
+
+        WRITTEN BEFORE THE ROW IS CONFIRMED, for the reason DELIVERING is written before the
+        send. A crash between the two leaves the row DELIVERING and the marker set, so the next
+        reconciliation asks the same question again and adopts nothing twice; the other order
+        loses the turn exactly as before.
+
+        An outstanding turn already on the row is NOT displaced -- it names a wait this relay has
+        not finished, and there is only one conversation to be waiting in.
+        """
+        relay = self._row()
+        if relay["awaiting_message_id"]:
+            return False
+        exchange_no = int(relay["exchange_no"]) + 1
+        self.state.update(self.relay_id, exchange_no=exchange_no,
+                          awaiting_message_id=row["message_id"],
+                          awaiting_native_id=str(row.get("native_id") or ""),
+                          awaiting_role=target_role, last_activity_at=self._now())
+        self._event("relay.awaiting.adopted",
+                    {"message_id": row["message_id"], "role": target_role,
+                     "exchange_no": exchange_no,
+                     "note": "reconciliation confirmed this delivery, so the reply to it is "
+                             "OUTSTANDING; it is collected, never re-delivered"})
+        return True
+
     def reconcile(self) -> StepResult | None:
         """Resolve every DELIVERING row left by a crash. ASK THE ENDPOINT; never assume.
 
@@ -741,6 +814,10 @@ class RelayKernel:
                                             "role": target_role,
                                             "error": str(exc)})
             if already:
+                # THE TURN THIS DELIVERY OPENED IS ADOPTED FIRST, and only then is the row
+                # confirmed -- ``_adopt_confirmed_delivery`` says why that order and not the
+                # other one.
+                self._adopt_confirmed_delivery(row, target_role)
                 self.state.complete_delivery(self.relay_id, row["message_id"],
                                              native_id=row.get("native_id") or "",
                                              state=state_mod.CONFIRMED_AFTER_CRASH)
@@ -1167,6 +1244,21 @@ class RelayKernel:
         # The third option is the correct one: pick the same anchor back up and collect the
         # reply the endpoint has been holding all along.
         resuming = bool(row["awaiting_message_id"])
+        if resuming and self.state.reply_to(self.relay_id, row["awaiting_message_id"]):
+            # THE FAR EDGE OF THE SAME WINDOW. The reply to this turn is ALREADY in the durable
+            # record, so the crash landed after it was written and before the marker naming it
+            # could be cleared. The turn is closed: re-reading the endpoint for a reply the
+            # ledger already holds would return a turn the ledger has seen, and the stale-replay
+            # guard -- rightly -- would stop the relay for no progress over work that was in fact
+            # done. Close it here and take the queue instead.
+            self._event("relay.awaiting.already_recorded",
+                        {"message_id": row["awaiting_message_id"],
+                         "role": row["awaiting_role"],
+                         "note": "the reply was recorded before this relay died; the "
+                                 "outstanding turn is closed, not collected a second time"})
+            self._close_awaited_turn()
+            row = self._row()
+            resuming = False
         if resuming:
             pending = self.state.seen(self.relay_id, row["awaiting_message_id"])
             if pending is None:
@@ -1199,6 +1291,12 @@ class RelayKernel:
             before = self._before_reading(row, target_role, fresh=True)
 
             ok, detail = self._deliver(pending)
+            if not ok and detail.get("claim_lost"):
+                # NOT A FAILURE OF THIS ENDPOINT: it was never asked. The relay is PAUSED rather
+                # than FAILED because nothing is broken -- another writer holds the delivery, and
+                # whatever it does with it is recorded on the same row.
+                return self._finish(STOP_DELIVERY_CLAIM_LOST, state=state_mod.PAUSED,
+                                    detail=detail)
             if not ok:
                 return self._finish(
                     STOP_EXECUTION_DISCONNECT if target_role == ROLE_EXECUTION
@@ -1313,10 +1411,11 @@ class RelayKernel:
                                                   "durable record; refusing to treat old "
                                                   "output as new work"})
 
-        # THE TURN IS CLOSED. Cleared only now, after a genuinely new completed reply is in
-        # hand: clearing it any earlier would reopen the gap this field exists to close.
-        self.state.update(self.relay_id, awaiting_message_id="", awaiting_native_id="",
-                          awaiting_role="", last_activity_at=self._now())
+        # THE TURN IS NOT CLOSED HERE. "A completed reply is in hand" is a fact about a local
+        # variable, and this process is precisely the thing that may not survive: a sanitiser,
+        # two gates and a corroboration run sit between here and the statement that makes the
+        # reply durable. The marker comes off in ``_close_awaited_turn``, once the record holds
+        # the reply it names.
         self._refresh_identities(row)
 
         result = StepResult(delivered=pending["message_id"], received=reply.message_id,
@@ -1378,6 +1477,11 @@ class RelayKernel:
                           exchange_no=exchange_no, causal_parent=pending["message_id"],
                           raw=safe_text, provenance=reply.provenance,
                           observed_at=reply.observed_at)
+            # DURABLE NOW, so the wait it answers is over. Before the gate, because a held
+            # directive is still a collected turn: leaving the marker on a relay parked in
+            # OWNER_HOLD would send the resume that follows an owner decision back to the
+            # endpoint for a reply the ledger already holds.
+            self._close_awaited_turn()
             if not gate.allowed:
                 # The directive is RECORDED and NOT DELIVERED. Keeping it visible is the point:
                 # the operator being interrupted should be able to read exactly what was asked.
@@ -1448,6 +1552,9 @@ class RelayKernel:
                           exchange_no=exchange_no, causal_parent=pending["message_id"],
                           raw=safe_text, provenance=reply.provenance,
                           observed_at=reply.observed_at)
+            # DURABLE NOW -- the same reason as the other direction, and the observation hold
+            # below parks the relay in exactly the same way.
+            self._close_awaited_turn()
             if observation_gate is not None and not observation_gate.allowed:
                 # The agent did something the profile does not grant. Its turn is safely in the
                 # record now, so the hold stops the relay without losing the work, the packet
