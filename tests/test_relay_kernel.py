@@ -1044,7 +1044,12 @@ class TestResumeKeepsTheDiagnosis(RelayFixture):
         st.resume_running = watched
         self.addCleanup(lambda: setattr(st, "resume_running", real_resume_running))
 
-        k2 = self._resumer("relay-diag", orchestrator=Watcher(replies=["a"]))
+        # The endpoint has no further turn in it: a CONFIRMED reconciliation now leaves the
+        # relay with the outstanding turn that delivery opened (control 394), so the re-stop
+        # this asserts comes from the endpoint running dry rather than from the empty-queue
+        # defect that used to produce it. What is being proven is unchanged: the resumed relay
+        # re-stops, the row names THAT reason, and the diagnosis it displaced is still readable.
+        k2 = self._resumer("relay-diag", orchestrator=Watcher(replies=[]))
         outcome = k2.resume()
         self.assertEqual(seen, [(state_mod.FAILED, kernel_mod.STOP_START_REFUSED)],
                          "reconciliation ran against a row whose diagnosis was already erased")
@@ -1059,11 +1064,11 @@ class TestResumeKeepsTheDiagnosis(RelayFixture):
                          kernel_mod.STOP_START_REFUSED)
         self.assertEqual(superseded[0]["previous_state"], state_mod.FAILED)
 
-        # THE SYMPTOM, END TO END. The resumed relay re-stops for a generic reason and the row
-        # says so -- and the operator can still learn what it was actually parked on.
-        self.assertEqual(k2.step().stop, kernel_mod.STOP_NO_PROGRESS)
+        # THE SYMPTOM, END TO END. The resumed relay re-stops for a different reason and the
+        # row says so -- and the operator can still learn what it was actually parked on.
+        self.assertEqual(k2.step().stop, kernel_mod.STOP_ORCHESTRATOR_DISCONNECT)
         self.assertEqual(self.state.get("relay-diag")["stop_reason"],
-                         kernel_mod.STOP_NO_PROGRESS)
+                         kernel_mod.STOP_ORCHESTRATOR_DISCONNECT)
         self.assertIn(kernel_mod.EVENT_RESUME_SUPERSEDED, self._kinds("relay-diag"))
 
         # -- B: the stop RECONCILIATION ITSELF takes names what it displaced -------------------
@@ -1214,3 +1219,344 @@ class TestResumeKeepsTheDiagnosis(RelayFixture):
         self.assertEqual(res5.hold.get(kernel_mod.PREVIOUS_STOP_REASON),
                          kernel_mod.STOP_START_REFUSED,
                          "the re-gate replaced the diagnosis without naming what it replaced")
+
+
+class TestDeliveryLedgerCrashWindows(RelayFixture):
+    """bd quaestor-cjx. Three windows between two statements, and a fourth verdict that was
+    quietly forgotten.
+
+    The ledger was right about every MESSAGE and wrong about the relay's own position in the
+    conversation: a delivery reconciliation confirmed left nothing outstanding, the marker naming
+    an outstanding turn came off before the turn's reply was durable, and a delivery was taken
+    rather than claimed. None of these can duplicate a delivery in single-process operation --
+    they destroy the RECOVERY, which is the only thing the ledger is for.
+
+    Every control here writes the crash BETWEEN the two statements. Asserting the end state of a
+    clean run cannot tell one order from the other, which is exactly how these survived review.
+    """
+
+    def _resumer(self, relay_id, *, orchestrator=None, execution=None, cls=None, **cfg):
+        """A SECOND kernel over the SAME durable record, which is what a resume actually is."""
+        return (cls or kernel_mod.RelayKernel)(
+            st=self.state, orchestrator=orchestrator or FakeOrchestratorEnd(replies=["a"]),
+            execution=execution or FakeExecutionEnd(replies=["b"]),
+            project_root=self.repo, relay_id=relay_id,
+            config=kernel_mod.RelayConfig(objective="o", authority_profile="STANDARD_EDIT",
+                                          **cfg))
+
+    def _crash_mid_delivery(self, relay_id):
+        """Leave the record exactly as a kill between DELIVERING and the acknowledgement does.
+
+        The endpoint really accepted the message -- that is what ``fail_after_send`` buys -- and
+        this relay really never learned it, so the row is the crash evidence and NOTHING records
+        a wait, because the wait is written after the acknowledgement that never arrived.
+        """
+        o = FakeOrchestratorEnd(replies=["instruction"], fail_after_send=1)
+        k = kernel_mod.RelayKernel(
+            st=self.state, orchestrator=o, execution=FakeExecutionEnd(replies=["done"]),
+            project_root=self.repo, relay_id=relay_id,
+            config=kernel_mod.RelayConfig(objective="o", authority_profile="STANDARD_EDIT"))
+        k.start()
+        self.assertEqual(k.step().stop, kernel_mod.STOP_ORCHESTRATOR_DISCONNECT)
+        pending = self.state.pending_deliveries(relay_id)
+        self.assertEqual(len(pending), 1, "a crashed delivery must leave the DELIVERING evidence")
+        self.assertEqual(self.state.get(relay_id)["awaiting_message_id"], "",
+                         "the kill landed before any wait could be recorded")
+        return pending[0], [mid for mid, _t in o.sent]
+
+    @control(394)
+    def test_a_reconciled_delivery_leaves_the_relay_where_a_delivered_one_does(self):
+        """A CONFIRMED delivery succeeded, so the reply to it is OUTSTANDING, not absent."""
+        row0, held = self._crash_mid_delivery("relay-confirm")
+        mid = row0["message_id"]
+
+        # The replacement endpoint truthfully holds what the dead one accepted.
+        o2 = FakeOrchestratorEnd(replies=["instruction"])
+        for held_id in held:
+            o2._sent.append((held_id, "recovered"))
+
+        # THE ORDER, NOT THE OUTCOME. The turn is adopted BEFORE the row is confirmed: a crash
+        # between the two must leave the question still askable, and only this order does. An
+        # end-state assertion cannot tell "adopt then confirm" from "confirm then adopt".
+        at_confirm = []
+        real_complete = self.state.complete_delivery
+
+        def watched(relay_id, message_id, **kw):
+            at_confirm.append(self.state.get(relay_id)["awaiting_message_id"])
+            return real_complete(relay_id, message_id, **kw)
+
+        self.state.complete_delivery = watched
+        self.addCleanup(lambda: setattr(self.state, "complete_delivery", real_complete))
+
+        k2 = self._resumer("relay-confirm", orchestrator=o2)
+        self.assertIsNone(k2.resume())
+        self.assertEqual(at_confirm, [mid],
+                         "the row was confirmed before the turn it opened was adopted")
+        self.assertEqual(self.state.seen("relay-confirm", mid)["delivery_state"],
+                         state_mod.CONFIRMED_AFTER_CRASH)
+
+        row = self.state.get("relay-confirm")
+        self.assertEqual(row["awaiting_message_id"], mid,
+                         "a confirmed delivery left nothing outstanding")
+        self.assertEqual(row["awaiting_role"], "ORCHESTRATOR")
+        self.assertEqual(int(row["exchange_no"]), 1,
+                         "the confirmed exchange was not counted, so the ceiling and every "
+                         "packet number now disagree with what actually happened")
+        self.assertEqual(len(o2.sent), len(held), "a confirmed message must never be re-sent")
+
+        # THE DEFECT ITSELF. The queue is empty BECAUSE the message really was delivered, so a
+        # relay that reads only the queue stops for no progress -- for ever, since every later
+        # resume reaches that same empty queue -- while the endpoint holds a finished reply.
+        self.assertEqual(self.state.undelivered("relay-confirm"), [])
+        res = k2.step()
+        self.assertEqual(res.stop, "", "the resumed relay stopped instead of collecting")
+        self.assertTrue(res.received, "the outstanding reply was never collected")
+        packets = [m["text"] for m in self.state.messages("relay-confirm", FROM_ORCHESTRATOR)]
+        self.assertTrue(any("instruction" in t for t in packets))
+        self.assertEqual(self.state.get("relay-confirm")["awaiting_message_id"], "",
+                         "the collected turn closes the wait it answered")
+        self.assertEqual(len(o2.sent), len(held), "collecting a reply is not a delivery")
+
+        # -- the window itself: a kill BETWEEN the adoption and the confirmation ---------------
+        row1, held1 = self._crash_mid_delivery("relay-window")
+        mid1 = row1["message_id"]
+        o3 = FakeOrchestratorEnd(replies=["instruction"])
+        for held_id in held1:
+            o3._sent.append((held_id, "recovered"))
+
+        class DiesConfirming(kernel_mod.RelayKernel):
+            """Killed with the turn adopted and the row not yet confirmed."""
+
+            def _adopt_confirmed_delivery(self, row, target_role):
+                super()._adopt_confirmed_delivery(row, target_role)
+                raise SystemExit("killed between the adoption and the confirmation")
+
+        with self.assertRaises(SystemExit):
+            self._resumer("relay-window", orchestrator=o3, cls=DiesConfirming).resume()
+        self.assertEqual(self.state.seen("relay-window", mid1)["delivery_state"],
+                         state_mod.DELIVERING, "the crash left the row unconfirmed")
+        self.assertEqual(self.state.get("relay-window")["awaiting_message_id"], mid1)
+        counted = int(self.state.get("relay-window")["exchange_no"])
+
+        # THE SAME QUESTION IS ASKED AGAIN, and nothing is adopted twice.
+        o4 = FakeOrchestratorEnd(replies=["instruction"])
+        for held_id in held1:
+            o4._sent.append((held_id, "recovered"))
+        k4 = self._resumer("relay-window", orchestrator=o4)
+        self.assertIsNone(k4.resume())
+        after = self.state.get("relay-window")
+        self.assertEqual(int(after["exchange_no"]), counted,
+                         "one delivery was counted as two exchanges")
+        self.assertEqual(after["awaiting_message_id"], mid1)
+        self.assertEqual(self.state.seen("relay-window", mid1)["delivery_state"],
+                         state_mod.CONFIRMED_AFTER_CRASH)
+        self.assertEqual(k4.step().stop, "",
+                         "a relay crashed twice in the same window still owes its turn")
+
+        # -- and the verdict that STOPS the relay is not forgotten by the next resume ----------
+        class Amnesiac(FakeOrchestratorEnd):
+            holds = None                       # the capability is ABSENT, not merely False
+
+        row2, _held2 = self._crash_mid_delivery("relay-unresolved")
+        mid2 = row2["message_id"]
+        first = self._resumer("relay-unresolved",
+                              orchestrator=Amnesiac(replies=["x"])).resume()
+        self.assertEqual(first.stop, kernel_mod.STOP_UNRECONCILABLE)
+        self.assertEqual(self.state.seen("relay-unresolved", mid2)["delivery_state"],
+                         state_mod.UNRECONCILABLE)
+
+        second = self._resumer("relay-unresolved",
+                               orchestrator=Amnesiac(replies=["x"])).resume()
+        self.assertIsNotNone(second, "the resume walked straight past an unresolved delivery")
+        self.assertEqual(second.stop, kernel_mod.STOP_UNRECONCILABLE,
+                         "an unresolved delivery stopped being visible as unresolved")
+        unresolved = self.state.get("relay-unresolved")
+        self.assertEqual(unresolved["state"], state_mod.PAUSED)
+        self.assertEqual(unresolved["stop_reason"], kernel_mod.STOP_UNRECONCILABLE,
+                         "the diagnosis a human has to act on was replaced by a symptom")
+        self.assertEqual(self.state.seen("relay-unresolved", mid2)["delivery_state"],
+                         state_mod.UNRECONCILABLE)
+
+        # IT IS A QUESTION, NOT A WALL: the endpoint the operator repaired settles it.
+        answering = FakeOrchestratorEnd(replies=["instruction"])
+        answering._sent.append((mid2, "recovered"))
+        k5 = self._resumer("relay-unresolved", orchestrator=answering)
+        self.assertIsNone(k5.resume(), "a repaired endpoint could not settle the question")
+        self.assertEqual(self.state.seen("relay-unresolved", mid2)["delivery_state"],
+                         state_mod.CONFIRMED_AFTER_CRASH)
+
+    @control(395)
+    def test_the_awaited_turn_marker_outlives_the_reply_it_names(self):
+        """The marker is the only way back to a turn the endpoint has already finished."""
+        # -- A: killed where the clear used to have already run -------------------------------
+        class DiesBeforeRecording(kernel_mod.RelayKernel):
+            """Killed between collecting the reply and writing it down -- a sanitiser, two
+            gates and a corroboration run away from durability, and the old clear was BEFORE
+            all of it."""
+
+            def _refresh_identities(self, row):
+                raise SystemExit("killed with the reply in hand and nowhere in the record")
+
+        k = DiesBeforeRecording(
+            st=self.state, orchestrator=FakeOrchestratorEnd(replies=["instruction"]),
+            execution=FakeExecutionEnd(replies=["done"]), project_root=self.repo,
+            relay_id="relay-mark",
+            config=kernel_mod.RelayConfig(objective="o", authority_profile="STANDARD_EDIT"))
+        k.start()
+        seed = self.state.undelivered("relay-mark")[0]
+        with self.assertRaises(SystemExit):
+            k.step()
+
+        row = self.state.get("relay-mark")
+        self.assertEqual(row["awaiting_message_id"], seed["message_id"],
+                         "the record of what the relay was waiting for was destroyed by a "
+                         "crash in the window, and the endpoint's finished turn with it")
+        self.assertEqual(row["awaiting_role"], "ORCHESTRATOR")
+        self.assertIsNone(self.state.reply_to("relay-mark", seed["message_id"]),
+                          "the reply is NOT durable yet: that is what makes the marker the "
+                          "only way back to it")
+
+        k2 = self._resumer("relay-mark",
+                           orchestrator=FakeOrchestratorEnd(replies=["instruction"]))
+        self.assertIsNone(k2.resume())
+        self.assertEqual(k2.step().stop, "", "the outstanding turn was not collected")
+        self.assertIsNotNone(self.state.reply_to("relay-mark", seed["message_id"]))
+        self.assertEqual(self.state.get("relay-mark")["awaiting_message_id"], "")
+
+        # -- B: the ORDER. At the instant the marker comes off, its reply is already a row ----
+        at_clear = []
+
+        class WatchesTheClear(kernel_mod.RelayKernel):
+            def _close_awaited_turn(self):
+                r = self._row()
+                at_clear.append((r["awaiting_message_id"],
+                                 self.state.reply_to(self.relay_id,
+                                                     r["awaiting_message_id"]) is not None))
+                return super()._close_awaited_turn()
+
+        k3 = WatchesTheClear(
+            st=self.state, orchestrator=FakeOrchestratorEnd(replies=["instruction"]),
+            execution=FakeExecutionEnd(replies=["done"]), project_root=self.repo,
+            relay_id="relay-order",
+            config=kernel_mod.RelayConfig(objective="o", authority_profile="STANDARD_EDIT"))
+        k3.start()
+        k3.step()
+        k3.step()
+        self.assertEqual(len(at_clear), 2, "the turns were never closed at all")
+        for awaited, recorded in at_clear:
+            self.assertTrue(awaited, "the marker was already gone when the turn was closed")
+            self.assertTrue(recorded,
+                            "the marker came off before the reply it names was durable")
+
+        # -- C: the far edge -- reply recorded, marker still standing -------------------------
+        class DiesBeforeClearing(kernel_mod.RelayKernel):
+            def _close_awaited_turn(self):
+                raise SystemExit("killed after recording the reply, before closing the turn")
+
+        k4 = DiesBeforeClearing(
+            st=self.state, orchestrator=FakeOrchestratorEnd(replies=["instruction"]),
+            execution=FakeExecutionEnd(replies=["done"]), project_root=self.repo,
+            relay_id="relay-faredge",
+            config=kernel_mod.RelayConfig(objective="o", authority_profile="STANDARD_EDIT"))
+        k4.start()
+        seed4 = self.state.undelivered("relay-faredge")[0]
+        with self.assertRaises(SystemExit):
+            k4.step()
+        self.assertEqual(self.state.get("relay-faredge")["awaiting_message_id"],
+                         seed4["message_id"])
+        recorded = self.state.reply_to("relay-faredge", seed4["message_id"])
+        self.assertIsNotNone(recorded, "the reply must be durable before the marker comes off")
+
+        k5 = self._resumer("relay-faredge",
+                           orchestrator=FakeOrchestratorEnd(replies=["instruction"]),
+                           execution=FakeExecutionEnd(replies=["done"]))
+        self.assertIsNone(k5.resume())
+        res5 = k5.step()
+        self.assertNotEqual(res5.stop, kernel_mod.STOP_NO_PROGRESS,
+                            "the resumed relay asked for a reply the ledger already held and "
+                            "then refused its own turn as a stale replay")
+        self.assertEqual(res5.stop, "")
+        self.assertEqual(res5.delivered, recorded["message_id"],
+                         "the answered turn was closed and the queue taken instead")
+        self.assertIn("relay.awaiting.already_recorded",
+                      [ev["kind"] for ev in self.state.events("relay-faredge")])
+        self.assertEqual(self.state.get("relay-faredge")["awaiting_message_id"], "")
+
+    @control(396)
+    def test_a_delivery_is_claimed_not_assumed(self):
+        """``begin_delivery`` wrote the row whatever it said, and nothing excluded a second
+        process on the same state home."""
+        # -- A: the ledger's own answer, state by state ---------------------------------------
+        k, _o, _e = self.build(orch_replies=["a"], exec_replies=["b"], relay_id="relay-claim")
+        k.start()
+        mid = self.state.undelivered("relay-claim")[0]["message_id"]
+        self.assertTrue(self.state.begin_delivery("relay-claim", mid, delivery_id="writer-A"),
+                        "the first writer was refused its own claim")
+        self.assertFalse(self.state.begin_delivery("relay-claim", mid, delivery_id="writer-B"),
+                         "a claimed delivery was handed to a second writer")
+        self.assertEqual(self.state.seen("relay-claim", mid)["delivery_id"], "writer-A",
+                         "the loser overwrote the winner's claim")
+
+        # THE QUEUE AND THE CLAIM AGREE, ON EVERY STATE THE LEDGER HAS. A row the queue offers
+        # that the claim refuses is a relay that stops for nothing; a row the claim takes that
+        # the queue never offers is the second send this ledger exists to prevent.
+        for delivery_state in (state_mod.OBSERVED, state_mod.REDELIVERABLE,
+                               state_mod.DELIVERING, state_mod.DELIVERED,
+                               state_mod.CONFIRMED_AFTER_CRASH, state_mod.UNRECONCILABLE,
+                               state_mod.OWNER_HELD):
+            self.state.mark_delivery("relay-claim", mid, delivery_state)
+            queued = any(r["message_id"] == mid
+                         for r in self.state.undelivered("relay-claim"))
+            claimed = self.state.begin_delivery("relay-claim", mid, delivery_id="probe")
+            self.assertEqual(queued, claimed,
+                             "the queue and the claim disagree about %s" % delivery_state)
+
+        # -- B: the window, driven through the real delivery path ------------------------------
+        # The queue is read, and only THEN is the row claimed. A second process is what lives in
+        # between those two statements, so that is exactly where this one puts it.
+        other = []
+
+        class LosesTheRace(kernel_mod.RelayKernel):
+            def _before_reading(self, row, target_role, *, fresh):
+                out = super()._before_reading(row, target_role, fresh=fresh)
+                queue = self.state.undelivered(self.relay_id)
+                if queue and not other:
+                    other.append(self.state.begin_delivery(
+                        self.relay_id, queue[0]["message_id"],
+                        delivery_id="the-other-process"))
+                return out
+
+        loser = FakeOrchestratorEnd(replies=["a"])
+        k2 = LosesTheRace(
+            st=self.state, orchestrator=loser, execution=FakeExecutionEnd(replies=["b"]),
+            project_root=self.repo, relay_id="relay-race2",
+            config=kernel_mod.RelayConfig(objective="o", authority_profile="STANDARD_EDIT"))
+        k2.start()
+        raced = self.state.undelivered("relay-race2")[0]["message_id"]
+        res = k2.step()
+
+        self.assertEqual(other, [True], "the other writer never actually got the claim")
+        self.assertEqual(loser.sent, [], "the losing writer sent the message anyway")
+        self.assertEqual(res.stop, kernel_mod.STOP_DELIVERY_CLAIM_LOST)
+        self.assertNotEqual(res.stop, kernel_mod.STOP_ORCHESTRATOR_DISCONNECT,
+                            "a lost claim was reported as an endpoint that is not there")
+        claimed_row = self.state.seen("relay-race2", raced)
+        self.assertEqual(claimed_row["delivery_id"], "the-other-process",
+                         "the loser overwrote the winner's claim on its way past")
+        self.assertEqual(claimed_row["delivery_state"], state_mod.DELIVERING)
+
+        relay_row = self.state.get("relay-race2")
+        self.assertEqual(relay_row["state"], state_mod.PAUSED)
+        self.assertEqual(relay_row["stop_reason"], kernel_mod.STOP_DELIVERY_CLAIM_LOST)
+        self.assertEqual(relay_row["awaiting_message_id"], "",
+                         "a delivery that never happened left a turn outstanding")
+
+        kinds = [ev["kind"] for ev in self.state.events("relay-race2")]
+        self.assertNotIn("relay.delivering", kinds,
+                         "the loser announced a delivery it was not allowed to make")
+        lost = [ev["payload"] for ev in self.state.events("relay-race2")
+                if ev["kind"] == "relay.delivery.claim_lost"]
+        self.assertEqual(len(lost), 1, "the losing writer said nothing about losing")
+        self.assertTrue(lost[0]["claim_lost"])
+        self.assertEqual(lost[0]["held_by"], "the-other-process")
+        self.assertEqual(lost[0]["delivery_state"], state_mod.DELIVERING)

@@ -806,6 +806,28 @@ REQUIRED_CONTROLS.update({
          "Core read surface fails permanently on a store the writing open reads fine, with the "
          "paired negative that a drive path does NOT gain those slashes. Asserted on the URI "
          "the code builds, never on one the test rebuilds (bd quaestor-mpp)",
+    # -- crash windows in the delivery ledger (bd quaestor-cjx) --------------------------------
+    394: "reconciliation's verdicts survive the resume that reached them. A CONFIRMED delivery "
+         "is a delivery that SUCCEEDED, so it leaves the same outstanding turn one does -- "
+         "adopted BEFORE the row is confirmed, proven by reading the row at the instant of the "
+         "confirming write and by killing the process between the two, which costs one exchange "
+         "and no turn -- instead of emptying the queue and stopping the relay NO_PROGRESS for "
+         "ever while the endpoint holds a reply nobody will collect. And UNRECONCILABLE is an "
+         "OPEN question, not a settled one: the next resume asks it again and stops by its own "
+         "name rather than blanking it and re-stopping generically, while an endpoint that can "
+         "answer still settles it (bd quaestor-cjx)",
+    395: "the awaited-turn marker outlives the reply it names. Killed where the clear used to "
+         "have already run -- a sanitiser and two gates before the reply was durable -- the "
+         "record still names what was outstanding and the turn is collected by the next relay; "
+         "at the moment the marker DOES come off, the reply it names is already a row; and a "
+         "kill at the far edge, reply recorded and marker still standing, is recognised and "
+         "closed rather than re-asked and refused by the stale-replay guard (bd quaestor-cjx)",
+    396: "a delivery is CLAIMED, not assumed. The claim is a compare-and-swap over exactly the "
+         "states the queue hands out -- proven state by state, so the queue and the claim cannot "
+         "disagree -- and a second writer that takes the row in the window between reading the "
+         "queue and claiming it makes the first LOSE: it does not send, it does not overwrite "
+         "the winner's claim, it does not announce a delivery, and it stops by its own name "
+         "rather than blaming an endpoint it never spoke to (bd quaestor-cjx)",
 })
 
 
