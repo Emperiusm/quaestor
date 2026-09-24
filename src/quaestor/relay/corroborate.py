@@ -29,15 +29,29 @@ Same asymmetry ``observe`` exists for. An agent reporting its own test results i
 being described writing the description. These commands run in this process, against the
 authorised project root, and a command that cannot be run at all is UNMEASURABLE -- never
 "passed".
+
+WHY THE CEILING IS SPENT ON A FILE AND NOT ON A PIPE
+----------------------------------------------------
+``--verify-timeout`` is a promise about the RELAY, not about one child process. A check that
+starts a server, a watcher, or a test runner that daemonises hands the write end of a captured
+pipe to a grandchild the timeout never touches, and the drain that follows the kill then waits
+on that orphan rather than on the check -- so the relay sat inside corroboration past its
+ceiling with no stop reason and no output. The check's output therefore goes to a file this
+process owns, the wait is on the direct child alone, the file is read back under an explicit
+BYTE BUDGET -- an orphan still appending to it would otherwise stall the read exactly as it
+stalled the drain -- and what the check left running is REPORTED rather than hunted.
+``_run_bounded`` carries why hunting it is refused.
 """
 from __future__ import annotations
 
 import os
 import shlex
 import subprocess
+import tempfile
 import time
 from typing import Mapping, Sequence
 
+from quaestor import branding
 from quaestor.core import classification
 
 CORROBORATE_INSTRUMENT = "relay.corroborate/1"
@@ -57,6 +71,23 @@ UNMEASURABLE = "UNMEASURABLE"
 #: Output kept per check. Enough for an operator to see WHY a check disagreed, bounded so a
 #: chatty suite cannot push the durable record around.
 MAX_TAIL_CHARS = 2000
+
+#: Bytes read back out of the check's output file, and the reason that is a NUMBER rather than
+#: "however many there are". Only ``MAX_TAIL_CHARS`` of it survives anyway, and an
+#: argument-less ``read()`` is ``readall``, which loops until a read returns zero bytes -- a
+#: surviving grandchild still appending to the handle it inherited never lets that zero arrive.
+#: Without this budget the unbounded wait the file was introduced to REMOVE would simply have
+#: moved from the drain to the read, and taken the operator's disk and this process's memory
+#: with it. Comfortably above ``MAX_TAIL_CHARS`` so the tail is never short of material, even
+#: for output that is entirely multi-byte.
+MAX_SINK_READ_BYTES = 64 * 1024
+
+#: How long a killed check gets to be reaped before ``run_check`` gives up and returns anyway.
+#: The ceiling an operator is actually promised is ``--verify-timeout`` PLUS this, per check,
+#: and nothing else: the wait is on the DIRECT child, which a kill ends promptly whatever it
+#: spawned. Stated as a number rather than left implicit because a ceiling nobody can compute
+#: is not a ceiling.
+KILL_GRACE_S = 5.0
 
 
 def _tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:
@@ -93,6 +124,110 @@ def _split(cmd: str, out: dict):
     return argv
 
 
+def _run_bounded(argv, *, cwd: str, timeout_s: float) -> dict:
+    """Run ONE check under a ceiling that is WALL CLOCK time. Impure. Raises only spawn errors.
+
+    WHY NOT ``subprocess.run(capture_output=True, timeout=...)``, WHICH THIS REPLACED
+    --------------------------------------------------------------------------------
+    ``run`` kills the DIRECT child when the timeout expires and then goes back to
+    ``communicate()`` to drain the pipes. A pipe does not reach end-of-file until EVERY process
+    holding its write end has exited -- and a check that starts a server, a watcher, or a test
+    runner that daemonises hands that write end to a grandchild the timeout never touched. The
+    drain then blocks for as long as the orphan lives. The ceiling was a claim about the child;
+    the call was bounded by a process nobody was waiting for.
+
+    SO THERE IS NO PIPE. The check writes into a file this process owns, in the system temp
+    directory -- never under the project, whose movement is itself evidence this relay reads.
+    A file has no end-of-file to wait for -- but it still has a WRITER, so the read back is
+    taken under an explicit byte budget. Removing the pipe without that budget would only have
+    moved the unbounded wait from ``communicate()`` to ``read()``.
+
+    WHAT THIS DELIBERATELY DOES NOT DO, AND WHY THAT IS NOT AN OVERSIGHT
+    -------------------------------------------------------------------
+    It does not kill the check's descendants. Both ways of doing that are refused here for the
+    reason ``tests/procsafe.kill_argv`` records: walking a parent-pid tree, or signalling a
+    process group, once took down the very relay whose survival was being measured and then
+    reported the product broken. A surviving orphan is a leak an operator can see and end; a
+    relay wedged inside corroboration with no stop reason is not. This bounds the RELAY, and
+    the result says plainly that what the check spawned is still running.
+
+    The check is also NOT given a session or process group of its own, which is a decision and
+    not an omission: the only use for one would be the group kill above, and creating one costs
+    something real -- an orphan left in the relay's own group still dies with the operator's
+    Ctrl-C, and a session of its own would take even that away.
+    """
+    # THE PRODUCT NAME IS NOT SPELLED HERE. Control 172 holds branding.py as the only
+    # place this platform names itself, and a hardcoded prefix is exactly the drift it
+    # exists to catch -- a rename would leave this one temp file behind, still branded.
+    fd, sink_path = tempfile.mkstemp(prefix=branding.resource("check") + "-",
+                                     suffix=".out")
+    os.close(fd)
+    child = None
+    timed_out = False
+    try:
+        try:
+            with open(sink_path, "wb") as sink:
+                # stdin is DEVNULL rather than inherited. A check that reads a prompt would
+                # otherwise take the operator's keystrokes away from the relay and then block
+                # on input that is never coming -- a second, quieter way past the ceiling.
+                child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
+                                         stdout=sink, stderr=subprocess.STDOUT, shell=False)
+            deadline = time.time() + max(0.0, float(timeout_s))
+            try:
+                child.wait(timeout=max(0.0, deadline - time.time()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+        finally:
+            # Reached on the timeout AND on anything raised through the wait, Ctrl-C included:
+            # a check left running because the caller stopped watching is the leak this module
+            # is about, and a ``finally`` is the only cleanup that survives the failure it is
+            # there for.
+            if child is not None and child.poll() is None:
+                try:
+                    child.kill()
+                except OSError:
+                    pass
+                try:
+                    child.wait(timeout=KILL_GRACE_S)
+                except subprocess.TimeoutExpired:
+                    pass
+        try:
+            # THE TAIL, UNDER AN EXPLICIT BYTE BUDGET, AND NEVER ``fh.read()``. See
+            # ``MAX_SINK_READ_BYTES``: a read with no argument is bounded by the WRITER, and the
+            # writer here may be a process nobody is waiting for. ``buffering=0`` is part of the
+            # fix rather than a detail -- it makes this ONE ``os.read`` that returns at or
+            # before the budget, where a buffered ``read(n)`` keeps asking until it has n bytes,
+            # which against a file still being appended to is the same unbounded wait in a
+            # smaller costume.
+            size = os.path.getsize(sink_path)
+            with open(sink_path, "rb", buffering=0) as fh:
+                if size > MAX_SINK_READ_BYTES:
+                    fh.seek(size - MAX_SINK_READ_BYTES)
+                data = fh.read(MAX_SINK_READ_BYTES) or b""
+        except OSError:
+            data = b""
+        return {"returncode": child.returncode, "output": data, "timed_out": timed_out,
+                "pid": int(child.pid)}
+    finally:
+        # EMPTIED BEFORE IT IS UNLINKED, because the unlink is the step that fails. A descendant
+        # that outlived the check still holds this file open and on Windows ``os.remove`` then
+        # refuses -- and that is not the rare case here but the ORDINARY one, since a surviving
+        # grandchild is the shape this module exists for. What the file holds is the check's RAW
+        # output, the one copy of it that ``classification.classify`` never sees, so a removal
+        # that cannot succeed must leave a zero-length file rather than a plaintext credential
+        # in the temp directory for good. Both steps stay best-effort: a temp file is not worth
+        # a hang.
+        try:
+            with open(sink_path, "r+b") as fh:
+                fh.truncate(0)
+        except OSError:
+            pass
+        try:
+            os.remove(sink_path)
+        except OSError:
+            pass
+
+
 def run_check(command, *, project_root: str, timeout_s: float = 300.0,
               at: float = 0.0) -> dict:
     """Run ONE verification command in the project. Impure. NEVER raises.
@@ -113,6 +248,8 @@ def run_check(command, *, project_root: str, timeout_s: float = 300.0,
         "exit_code": None,
         "error": "",
         "tail": "",
+        "timed_out": False,
+        "killed": None,
         "duration_s": 0.0,
         "at": stamp,
         "instrument": CORROBORATE_INSTRUMENT,
@@ -139,35 +276,43 @@ def run_check(command, *, project_root: str, timeout_s: float = 300.0,
         out["error"] = "command parsed to nothing"
         return out
     try:
-        # BYTES, then an explicit decode -- the same seam ``workspace.git`` uses, and the reason
-        # the static gate refuses ``text=True``: a check that prints a byte the ambient locale
-        # cannot decode would otherwise raise here, and a check that CRASHED THE CHECKER must
-        # never be indistinguishable from a check that failed honestly.
-        p = subprocess.run(argv, cwd=project_root, capture_output=True,
-                           timeout=float(timeout_s), shell=False)
+        p = _run_bounded(argv, cwd=project_root, timeout_s=float(timeout_s))
     except FileNotFoundError:
         out["error"] = "no such command: %s" % argv[0]
-        return out
-    except subprocess.TimeoutExpired:
-        out["error"] = "check exceeded %ss and was killed" % timeout_s
-        out["duration_s"] = round(time.time() - started, 3)
         return out
     except OSError as exc:
         out["error"] = "could not run check: %s" % exc
         return out
-    out["measured"] = True
-    out["exit_code"] = int(p.returncode)
-    out["ok"] = p.returncode == 0
-    # REDACTED AT THE SOURCE. A check's output is arbitrary project text that reaches two places
-    # a credential must never reach: the durable event log, and -- as a blocker explaining what
-    # failed -- a REMOTE PROVIDER. A failing test that dumps the config it loaded is ordinary.
-    # Classifying here rather than at each consumer means a future consumer cannot forget.
-    raw = ((p.stdout or b"").decode("utf-8", "replace")
-           + (p.stderr or b"").decode("utf-8", "replace"))
+    out["duration_s"] = round(time.time() - started, 3)
+    # BYTES, then an explicit decode -- the same seam ``workspace.git`` uses, and the reason the
+    # static gate refuses ``text=True``: a check that prints a byte the ambient locale cannot
+    # decode would otherwise raise here, and a check that CRASHED THE CHECKER must never be
+    # indistinguishable from a check that failed honestly.
+    #
+    # REDACTED AT THE SOURCE, ON BOTH PATHS. A check's output is arbitrary project text that
+    # reaches two places a credential must never reach: the durable event log, and -- as a
+    # blocker explaining what failed -- a REMOTE PROVIDER. A failing test that dumps the config
+    # it loaded is ordinary. Classifying here rather than at each consumer means a future
+    # consumer cannot forget, and a KILLED check is now such a consumer: it used to carry no
+    # output at all, so the timeout path would have been a new way out for the same secret.
+    raw = (p["output"] or b"").decode("utf-8", "replace")
     safe = classification.classify(raw)
     out["tail"] = _tail(safe.text)
     out["redacted"] = bool(getattr(safe, "findings", None) or safe.text != raw)
-    out["duration_s"] = round(time.time() - started, 3)
+    if p["timed_out"]:
+        # NAMES WHAT WAS ENDED AND WHAT WAS NOT. "It was killed" reads as a promise that nothing
+        # of the check survives, and that promise is one this module cannot keep -- so it is not
+        # made. An operator told a pid is loose can end it; one told nothing hunts a hang
+        # somewhere else.
+        out["timed_out"] = True
+        out["killed"] = {"pid": p["pid"], "command": out["command"]}
+        out["error"] = ("check exceeded %ss; the check process (pid %s) was killed. Anything it "
+                        "spawned was NOT killed and may still be running."
+                        % (timeout_s, p["pid"]))
+        return out
+    out["measured"] = True
+    out["exit_code"] = int(p["returncode"])
+    out["ok"] = p["returncode"] == 0
     return out
 
 
@@ -240,7 +385,11 @@ def blocker_line(v: Mapping) -> str:
     for c in (v or {}).get("checks") or ():
         if c.get("ok"):
             continue
-        t = str(c.get("tail") or c.get("error") or "").strip()
+        # ERROR THEN OUTPUT, both when both exist. A killed check now carries the output it
+        # managed to produce, and reading only that would have told the Orchestrator a check
+        # failed while hiding that it was never allowed to finish.
+        t = "\n".join(x for x in (str(c.get("error") or "").strip(),
+                                  str(c.get("tail") or "").strip()) if x)
         if t:
             tails.append("  %s ->\n%s" % (c.get("command"), t))
     body = "\n".join(tails)

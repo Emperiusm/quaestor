@@ -721,6 +721,22 @@ REQUIRED_CONTROLS.update({
          "a scratch directory it removes afterwards, never in the bound session or the "
          "authorised project, and it refuses a bare model name rather than spending an "
          "inference on a fabricated vendor (bd quaestor-7z1)",
+    # -- --verify-timeout bounds the RELAY, not one child process (bd quaestor-tcb) ------------
+    389: "--verify-timeout is a WALL CLOCK ceiling that TRACKS THE OPERATOR'S NUMBER, not a "
+         "claim in the payload and not merely a wide roof: the same check run at two ceilings "
+         "five seconds apart takes five seconds longer. A check that leaves a grandchild "
+         "holding the check's own stdout -- proven by a marker only that grandchild can write "
+         "-- returns inside the ceiling with the grandchild still alive; the result names the "
+         "CHECK'S OWN pid and says plainly that what it spawned was NOT ended; a check that "
+         "floods the inherited handle is read back under a byte budget rather than until the "
+         "writer stops; a check that reads a prompt gets end-of-file instead of the operator's "
+         "keyboard; and the sink is never left in the project (bd quaestor-tcb)",
+    390: "a check the ceiling killed is UNMEASURABLE and never a passing one, and the partial "
+         "output it managed to produce -- a path that used to carry none -- is classified "
+         "before it reaches the durable event log, the message ledger or the remote "
+         "Orchestrator, driven through the kernel rather than read off the verdict; and the "
+         "raw sink that a surviving grandchild keeps the relay from deleting is left EMPTY "
+         "rather than holding the credential (bd quaestor-tcb)",
 
     # ---- UNCERTAIN IS NOT DEAD (bd quaestor-9ap). reap guarded on `== ALIVE` and
     # recovered on everything else, so proc's UNKNOWN -- which its own docstring forbids
