@@ -1,0 +1,55 @@
+# Quaestor
+
+> An AI orchestration platform: governed delegation of work to Execution Agents, with
+> independent evidence instead of self-reported success.
+
+Quaestor has two orchestration modes. They are not layered: Relay Mode does not run through
+Program Mode. They share one substrate -- authority, evidence, repository observation and
+classification.
+
+**Relay Mode** keeps a selected Orchestrator and a selected Execution Agent in one continuous
+governed conversation with no copy/paste (`quaestor relay start`; also `resume`, `status`,
+`doctor`, `stop`). Quaestor carries every turn, reads the repository itself rather than
+believing the agent's account of its own work, and gates effects: a directive reaching for an
+effect the operator has not granted stops the relay and interrupts a human. Relay traffic is
+natural prose, not a JSON schema.
+
+**Program Mode** runs a loop: an operator creates a **program** with an objective and acceptance
+criteria; a planner attaches **lanes** (steps); `tick` admits at-most-one execution per dispatch
+identity, hands the executor an authority envelope plus a task, and reads back a single JSON
+**handoff** whose claims are reconciled against independently measured evidence; messages pause
+and resume lanes; nothing advances on chat alone.
+
+In both modes, authority is granted by humans through a governed vocabulary and is enforced
+outside the executor's reach.
+
+## Agent entry points
+
+- [docs/PRD.md](docs/PRD.md) -- the canonical product contract. Where this repository and the
+  PRD disagree about what the product IS, the PRD governs.
+- [.well-known/quaestor-agent.json](.well-known/quaestor-agent.json) -- machine-readable contract:
+  protocol version, surfaces, adapter modes (available vs planned), completion contract,
+  authority rules.
+- [skills/quaestor/SKILL.md](skills/quaestor/SKILL.md) -- instructions for an agent connecting
+  itself: discover state read-only, receive a task, satisfy the completion contract, escalate
+  correctly, and what changes when you are inside a relay instead.
+- [docs/RELAY-MODE.md](docs/RELAY-MODE.md) -- Relay Mode: the topology, the kernel's guarantees,
+  the endpoints that are qualified today, and how effects are governed.
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) -- installation, deployment home, execution modes,
+  owner channel: every command grounded in the real CLI.
+
+Status is stated honestly throughout: anything not built yet is labelled **planned**, not implied.
+Capability is reported on a maturity ladder -- IMPLEMENTED, TEST_QUALIFIED,
+LIVE_PROVIDER_QUALIFIED, LIVE_END_TO_END_QUALIFIED, PRODUCT_SUPPORTED -- so "it works" and "you
+can rely on it" stay separate claims.
+
+## Quaestor Core
+
+`quaestor serve` runs Quaestor Core: an authenticated loopback service boundary that future
+clients (a browser extension, a web UI, a tray) reach INSTEAD of reaching the machine. It is not
+a new execution path -- it reads the same durable stores the CLI writes.
+
+The API is five named operations (`core.status`, `core.identity`, `projects.list`, `relay.list`,
+`relay.status`) plus an unauthenticated `GET /health`. There is deliberately no execute, no file
+read or write, and no path parameter: a project is named by its id, and a client token is scoped
+to named projects. See docs/OPERATIONS.md section 12.

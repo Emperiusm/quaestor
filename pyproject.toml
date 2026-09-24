@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quaestor"
+version = "0.1.0"
+description = "Local-first, model-agnostic AI engineering control plane"
+readme = "README.md"
+requires-python = ">=3.11"
+# Source-available, not open source: free for noncommercial use, including research; commercial
+# use needs a separate licence (COMMERCIAL-LICENSE.md).
+license = { text = "PolyForm-Noncommercial-1.0.0" }
+
+# NO RUNTIME DEPENDENCIES, AND THAT IS A PROPERTY WORTH KEEPING.
+#
+# This platform is stdlib-only on purpose. Where it needed a facility the stdlib lacks it
+# built or shelled out rather than take a library: the clipboard adapter drives PowerShell
+# through subprocess, and the browser transport ships its own RFC 6455 client (see
+# quaestor/executors/websocket_client.py) rather than make Playwright mandatory.
+#
+# The payoff is that `pip install -e .` cannot fail on a resolver conflict inside somebody
+# else's repository, which is exactly where this tool has to install.
+dependencies = []
+
+[project.optional-dependencies]
+# The browser seat works WITHOUT this: the default transport is the stdlib CDP client. Install
+# it only to use Playwright's waiting primitives instead (browser_transport picks it up
+# automatically and records which transport it used).
+browser = ["playwright>=1.40"]
+
+[project.scripts]
+# THE ENTRY POINT THAT MAKES THIS USABLE. Before it existed, every command in this repo's own
+# documentation -- all written as `python -m quaestor.transports.cli ...` -- failed with
+# ModuleNotFoundError, because nothing put `src` on the path. An operator following the docs
+# hit that on line one and had nothing that worked.
+quaestor = "quaestor.transports.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# The agent-facing bootstrap files are DATA, not code, and are read at runtime from the
+# installed package -- so they have to travel with a wheel.
+quaestor = ["**/*.json", "**/*.txt", "**/*.md"]

@@ -1,0 +1,1158 @@
+{
+  "baseline_comparison": {
+    "project": {
+      "repo_identity": "SAME",
+      "tracked_content": "SAME",
+      "worktrees": "SAME"
+    },
+    "orchestrator": {
+      "repo_identity": "SAME",
+      "tracked_content": "SAME"
+    }
+  },
+  "captured_from": "p3_pipeline.py + p3_git_model.py executed runs",
+  "dispatch": {
+    "detail": "",
+    "dispatch_key": "bea1b00a687baa7ce6edd592ce46e68ebd624aaf97c8a717effcb82b304ae59e",
+    "extra": {
+      "spawn_pid": 27264
+    },
+    "outcome": "ADMITTED",
+    "reason": "",
+    "run_id": "11c7cccd-3b62-4d44-b76b-bdde66bab9fc",
+    "spawned": true,
+    "state": "DISPATCHED"
+  },
+  "egress_controls": {
+    "checks": {
+      "arbitrary_domain_denied": true,
+      "direct_ip_connect_denied": true,
+      "host_docker_internal_denied": true,
+      "lookalike_suffix_denied": true,
+      "no_direct_route_to_host_docker_internal": true,
+      "no_direct_route_to_public_host": true,
+      "no_direct_route_to_public_ip": true,
+      "no_direct_route_to_required_host": true,
+      "required_endpoint_reachable_through_gateway": true,
+      "unexpected_port_denied": true
+    },
+    "direct_route_available": false,
+    "failed": [],
+    "ok": true,
+    "probe": {
+      "direct_host_docker": {
+        "connected": false,
+        "error": "gaierror: [Errno -3] Temporary failure in name resolution"
+      },
+      "direct_public_host": {
+        "connected": false,
+        "error": "gaierror: [Errno -3] Temporary failure in name resolution"
+      },
+      "direct_public_ip": {
+        "connected": false,
+        "error": "OSError: [Errno 101] Network is unreachable"
+      },
+      "direct_required_host": {
+        "connected": false,
+        "error": "gaierror: [Errno -3] Temporary failure in name resolution"
+      },
+      "env_https_proxy": "http://project-p3-egress:8080",
+      "proxy": "project-p3-egress:8080",
+      "via_proxy_arbitrary": {
+        "established": false,
+        "reached_proxy": true,
+        "status_line": "HTTP/1.1 403 Forbidden"
+      },
+      "via_proxy_direct_ip": {
+        "established": false,
+        "reached_proxy": true,
+        "status_line": "HTTP/1.1 403 Forbidden"
+      },
+      "via_proxy_host_docker": {
+        "established": false,
+        "reached_proxy": true,
+        "status_line": "HTTP/1.1 403 Forbidden"
+      },
+      "via_proxy_lookalike": {
+        "established": false,
+        "reached_proxy": true,
+        "status_line": "HTTP/1.1 403 Forbidden"
+      },
+      "via_proxy_odd_port": {
+        "established": false,
+        "reached_proxy": true,
+        "status_line": "HTTP/1.1 403 Forbidden"
+      },
+      "via_proxy_required": {
+        "established": true,
+        "reached_proxy": true,
+        "status_line": "HTTP/1.1 200 Connection Established"
+      }
+    },
+    "run": {
+      "actual_reasons": [],
+      "actual_verdict": "CONTAINER_POLICY_OK",
+      "container_id": "ce8380bfa147",
+      "created": true,
+      "error": "",
+      "exit_code": 0,
+      "profile_verdict": "CONTAINER_POLICY_OK",
+      "removed": true,
+      "started": true,
+      "timed_out": false
+    }
+  },
+  "egress_ledger": {
+    "decisions_logged": 13,
+    "observed_destinations": {
+      "1.1.1.1": {
+        "class": "UNEXPLAINED",
+        "count": 1,
+        "decisions": [
+          "DENY"
+        ],
+        "ports": [
+          443
+        ]
+      },
+      "api.anthropic.com": {
+        "class": "CORE_REQUIRED",
+        "count": 8,
+        "decisions": [
+          "ALLOW",
+          "DENY"
+        ],
+        "ports": [
+          443,
+          2222
+        ]
+      },
+      "api.anthropic.com.evil.test": {
+        "class": "UNEXPLAINED",
+        "count": 1,
+        "decisions": [
+          "DENY"
+        ],
+        "ports": [
+          443
+        ]
+      },
+      "example.com": {
+        "class": "UNEXPLAINED",
+        "count": 1,
+        "decisions": [
+          "DENY"
+        ],
+        "ports": [
+          443
+        ]
+      },
+      "host.docker.internal": {
+        "class": "UNEXPLAINED",
+        "count": 1,
+        "decisions": [
+          "DENY"
+        ],
+        "ports": [
+          443
+        ]
+      }
+    },
+    "raw_tail": [
+      {
+        "decision": "ALLOW",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 46336)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "api.anthropic.com:443",
+        "ts": 1786635027.392513,
+        "upstream": "ESTABLISHED"
+      },
+      {
+        "decision": "DENY",
+        "event": "connect",
+        "host": "example.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 46342)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "no-matching-allow-rule",
+        "ts": 1786635027.3939464
+      },
+      {
+        "decision": "DENY",
+        "event": "connect",
+        "host": "1.1.1.1",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 46350)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "no-matching-allow-rule",
+        "ts": 1786635027.394965
+      },
+      {
+        "decision": "DENY",
+        "event": "connect",
+        "host": "host.docker.internal",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 46364)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "no-matching-allow-rule",
+        "ts": 1786635027.3955617
+      },
+      {
+        "decision": "DENY",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 46372)",
+        "policy_version": "p3-egress-1",
+        "port": 2222,
+        "rule": "no-matching-allow-rule",
+        "ts": 1786635027.3960648
+      },
+      {
+        "decision": "DENY",
+        "event": "connect",
+        "host": "api.anthropic.com.evil.test",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 46378)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "no-matching-allow-rule",
+        "ts": 1786635027.3965619
+      },
+      {
+        "decision": "ALLOW",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 53234)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "api.anthropic.com:443",
+        "ts": 1786635032.763611,
+        "upstream": "ESTABLISHED"
+      },
+      {
+        "decision": "ALLOW",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 53250)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "api.anthropic.com:443",
+        "ts": 1786635032.8516848,
+        "upstream": "ESTABLISHED"
+      },
+      {
+        "decision": "ALLOW",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 53258)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "api.anthropic.com:443",
+        "ts": 1786635032.8530173,
+        "upstream": "ESTABLISHED"
+      },
+      {
+        "decision": "ALLOW",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 53268)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "api.anthropic.com:443",
+        "ts": 1786635032.8803697,
+        "upstream": "ESTABLISHED"
+      },
+      {
+        "decision": "ALLOW",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 53284)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "api.anthropic.com:443",
+        "ts": 1786635032.883865,
+        "upstream": "ESTABLISHED"
+      },
+      {
+        "decision": "ALLOW",
+        "event": "connect",
+        "host": "api.anthropic.com",
+        "mode": "enforce",
+        "peer": "('172.18.0.3', 53288)",
+        "policy_version": "p3-egress-1",
+        "port": 443,
+        "rule": "api.anthropic.com:443",
+        "ts": 1786635032.9214988,
+        "upstream": "ESTABLISHED"
+      }
+    ]
+  },
+  "engine": {
+    "compose": "5.1.0",
+    "error": "",
+    "os_type": "linux",
+    "server": "29.2.1",
+    "state": "ENGINE_OK"
+  },
+  "fixture": {
+    "content_fp": {
+      "algorithm": "sha256",
+      "at": 0.0,
+      "class": "TRACKED_CONTENT",
+      "detail": {},
+      "digest": "b264d070307d2aaa5f7855519e781e6c98af9b13e7c7ce50f4ca292c353333c9",
+      "error": null,
+      "exclusions": [],
+      "inputs": "git rev-parse HEAD + git diff HEAD --binary: HEAD plus every tracked WORKING-TREE byte that differs from it",
+      "inspected_count": 3,
+      "instrument": "fingerprints/1",
+      "ok": true,
+      "run_id": "239fc8a836fa49ad99aeeeead4802d8a",
+      "scope": "the bytes of tracked files, via git's own object ids; NOT untracked files",
+      "source_revision": "fb6e3621d63b9ffad54ef0428fc1f222536a71d2"
+    },
+    "floor": {
+      "derivation_inputs": {
+        "host_file_count": 3
+      },
+      "derivation_method": "CONTAINER_WORKSPACE_INVENTORY",
+      "derived_at": 1786635021.5745509,
+      "derived_by": "bridge",
+      "floor_value": 3,
+      "instrument_version": "floors/1",
+      "note": "derived from the HOST fixture before the container started",
+      "source_digest": "69c24a2a9e30d3f06cdab8288e91f447e04991472c82f2f548aed954675dcdf4",
+      "source_revision": null
+    },
+    "head": "fb6e3621d63b9ffad54ef0428fc1f222536a71d2",
+    "path": "C:/project-p3\\semver-fixture",
+    "workspace_fp": {
+      "algorithm": "sha256",
+      "at": 0.0,
+      "class": "DIRECTORY_BYTES",
+      "detail": {},
+      "digest": "69c24a2a9e30d3f06cdab8288e91f447e04991472c82f2f548aed954675dcdf4",
+      "error": null,
+      "exclusions": [
+        ".git"
+      ],
+      "inputs": "path AND sha256 of RAW bytes for every file beneath C:/project-p3\\semver-fixture (symlinks by target, not followed)",
+      "inspected_count": 3,
+      "instrument": "fingerprints/1",
+      "ok": true,
+      "run_id": "239fc8a836fa49ad99aeeeead4802d8a",
+      "scope": "path AND bytes of every file beneath a directory",
+      "source_revision": null
+    }
+  },
+  "gateway": {
+    "allow": [
+      "api.anthropic.com:443",
+      "mcp-proxy.anthropic.com:443"
+    ],
+    "container_id": "28dec9032c1b3c58e08f7404edb468f13abaf0a7df786c887d8af2caa884db5a",
+    "error": null,
+    "mode": "enforce",
+    "ok": true,
+    "policy_version": "p3-egress-1"
+  },
+  "git_model": {
+    "P4_GIT_MODEL": "PASS",
+    "candidates": {
+      "A_worktree_only": {
+        "checks": {
+          "can_read_tracked_files": false,
+          "container_ran": true,
+          "deny_branch": true,
+          "deny_commit": true,
+          "deny_config_write": true,
+          "deny_stash": true,
+          "deny_tag": true,
+          "deny_update_ref": true,
+          "diff_sees_workspace_edit": false,
+          "git_resolves_head": false,
+          "head_is_exact": false,
+          "host_common_metadata_unchanged": true,
+          "primary_working_tree_not_exposed": true,
+          "status_sees_workspace_edit": false,
+          "status_works": false,
+          "workspace_edit_succeeded": true
+        },
+        "description": "the linked worktree alone; its .git FILE points at host metadata that is not present in the container",
+        "failed": [
+          "git_resolves_head",
+          "head_is_exact",
+          "status_works",
+          "status_sees_workspace_edit",
+          "diff_sees_workspace_edit",
+          "can_read_tracked_files"
+        ],
+        "git_env": {},
+        "mounts": [
+          {
+            "container_path": "/workspace",
+            "host_path": "c:/project-p3/gitlab/primary/.worktrees/child-wt",
+            "kind": "bind",
+            "mode": "rw",
+            "options": ""
+          }
+        ],
+        "profile_verdict": "CONTAINER_POLICY_OK",
+        "safe": true,
+        "usable": false
+      },
+      "B_worktree_plus_ro_common": {
+        "checks": {
+          "can_read_tracked_files": true,
+          "container_ran": true,
+          "deny_branch": true,
+          "deny_commit": true,
+          "deny_config_write": true,
+          "deny_stash": true,
+          "deny_tag": true,
+          "deny_update_ref": true,
+          "diff_sees_workspace_edit": true,
+          "git_resolves_head": true,
+          "head_is_exact": true,
+          "host_common_metadata_unchanged": true,
+          "primary_working_tree_not_exposed": true,
+          "status_sees_workspace_edit": true,
+          "status_works": true,
+          "workspace_edit_succeeded": true
+        },
+        "description": "whole primary .git read-only, env-directed; NOTE this exposes every ref and the config of the entire repository, though not the primary WORKING TREE",
+        "failed": [],
+        "git_env": {
+          "GIT_COMMON_DIR": "/git/common",
+          "GIT_DIR": "/git/common/worktrees/child-wt",
+          "GIT_OPTIONAL_LOCKS": "0",
+          "GIT_WORK_TREE": "/workspace"
+        },
+        "mounts": [
+          {
+            "container_path": "/workspace",
+            "host_path": "c:/project-p3/gitlab/primary/.worktrees/child-wt",
+            "kind": "bind",
+            "mode": "rw",
+            "options": ""
+          },
+          {
+            "container_path": "/git/common",
+            "host_path": "c:/project-p3/gitlab/primary/.git",
+            "kind": "bind",
+            "mode": "ro",
+            "options": ""
+          }
+        ],
+        "profile_verdict": "CONTAINER_POLICY_OK",
+        "safe": true,
+        "usable": true
+      },
+      "C_ro_common_plus_shadow_admin": {
+        "checks": {
+          "can_read_tracked_files": false,
+          "container_ran": true,
+          "deny_branch": true,
+          "deny_commit": true,
+          "deny_config_write": true,
+          "deny_stash": true,
+          "deny_tag": true,
+          "deny_update_ref": true,
+          "diff_sees_workspace_edit": true,
+          "git_resolves_head": false,
+          "head_is_exact": false,
+          "host_common_metadata_unchanged": true,
+          "primary_working_tree_not_exposed": true,
+          "status_sees_workspace_edit": true,
+          "status_works": true,
+          "workspace_edit_succeeded": true
+        },
+        "description": "read-only shared metadata plus a WRITABLE per-worktree admin dir (index refresh); the admin dir is disposable and worktree-local",
+        "failed": [
+          "git_resolves_head",
+          "head_is_exact",
+          "can_read_tracked_files"
+        ],
+        "git_env": {
+          "GIT_COMMON_DIR": "/git/common",
+          "GIT_DIR": "/git/admin",
+          "GIT_OPTIONAL_LOCKS": "0",
+          "GIT_WORK_TREE": "/workspace"
+        },
+        "mounts": [
+          {
+            "container_path": "/workspace",
+            "host_path": "c:/project-p3/gitlab/primary/.worktrees/child-wt",
+            "kind": "bind",
+            "mode": "rw",
+            "options": ""
+          },
+          {
+            "container_path": "/git/common",
+            "host_path": "c:/project-p3/gitlab/primary/.git",
+            "kind": "bind",
+            "mode": "ro",
+            "options": ""
+          },
+          {
+            "container_path": "/git/admin",
+            "host_path": "c:/project-p3/gitlab/primary/.git/worktrees/child-wt",
+            "kind": "bind",
+            "mode": "rw",
+            "options": ""
+          }
+        ],
+        "profile_verdict": "CONTAINER_POLICY_OK",
+        "safe": true,
+        "usable": false
+      },
+      "D_env_directed_all_ro": {
+        "checks": {
+          "can_read_tracked_files": false,
+          "container_ran": true,
+          "deny_branch": true,
+          "deny_commit": true,
+          "deny_config_write": true,
+          "deny_stash": true,
+          "deny_tag": true,
+          "deny_update_ref": true,
+          "diff_sees_workspace_edit": true,
+          "git_resolves_head": false,
+          "head_is_exact": false,
+          "host_common_metadata_unchanged": true,
+          "primary_working_tree_not_exposed": true,
+          "status_sees_workspace_edit": true,
+          "status_works": true,
+          "workspace_edit_succeeded": true
+        },
+        "description": "everything metadata-side read-only, env-directed; the strictest candidate that could still work",
+        "failed": [
+          "git_resolves_head",
+          "head_is_exact",
+          "can_read_tracked_files"
+        ],
+        "git_env": {
+          "GIT_COMMON_DIR": "/git/common",
+          "GIT_DIR": "/git/admin",
+          "GIT_OPTIONAL_LOCKS": "0",
+          "GIT_WORK_TREE": "/workspace"
+        },
+        "mounts": [
+          {
+            "container_path": "/workspace",
+            "host_path": "c:/project-p3/gitlab/primary/.worktrees/child-wt",
+            "kind": "bind",
+            "mode": "rw",
+            "options": ""
+          },
+          {
+            "container_path": "/git/common",
+            "host_path": "c:/project-p3/gitlab/primary/.git",
+            "kind": "bind",
+            "mode": "ro",
+            "options": ""
+          },
+          {
+            "container_path": "/git/admin",
+            "host_path": "c:/project-p3/gitlab/primary/.git/worktrees/child-wt",
+            "kind": "bind",
+            "mode": "ro",
+            "options": ""
+          }
+        ],
+        "profile_verdict": "CONTAINER_POLICY_OK",
+        "safe": true,
+        "usable": false
+      },
+      "E_ro_common_plus_prepared_shadow": {
+        "checks": {
+          "can_read_tracked_files": false,
+          "container_ran": false,
+          "deny_branch": false,
+          "deny_commit": false,
+          "deny_config_write": false,
+          "deny_stash": false,
+          "deny_tag": false,
+          "deny_update_ref": false,
+          "diff_sees_workspace_edit": false,
+          "git_resolves_head": false,
+          "head_is_exact": false,
+          "host_common_metadata_unchanged": true,
+          "primary_working_tree_not_exposed": true,
+          "status_sees_workspace_edit": false,
+          "status_works": false,
+          "workspace_edit_succeeded": false
+        },
+        "description": "read-only shared metadata plus a bridge-prepared, worktree-local admin dir whose commondir points into the container; the admin dir is a disposable COPY, so writes to it never reach host Git metadata",
+        "failed": [
+          "container_ran",
+          "git_resolves_head",
+          "head_is_exact",
+          "status_works",
+          "status_sees_workspace_edit",
+          "diff_sees_workspace_edit",
+          "can_read_tracked_files",
+          "workspace_edit_succeeded",
+          "deny_commit",
+          "deny_branch",
+          "deny_update_ref",
+          "deny_config_write",
+          "deny_stash",
+          "deny_tag"
+        ],
+        "git_env": {
+          "GIT_DIR": "/git/admin",
+          "GIT_OPTIONAL_LOCKS": "0",
+          "GIT_WORK_TREE": "/workspace"
+        },
+        "mounts": [
+          {
+            "container_path": "/workspace",
+            "host_path": "c:/project-p3/gitlab/primary/.worktrees/child-wt",
+            "kind": "bind",
+            "mode": "rw",
+            "options": ""
+          },
+          {
+            "container_path": "/git/common",
+            "host_path": "c:/project-p3/gitlab/primary/.git",
+            "kind": "bind",
+            "mode": "ro",
+            "options": ""
+          },
+          {
+            "container_path": "/git/admin",
+            "host_path": "c:/project-p3/gitlab/shadow-admin",
+            "kind": "bind",
+            "mode": "rw",
+            "options": ""
+          }
+        ],
+        "profile_verdict": "CONTAINER_POLICY_REFUSED",
+        "safe": false,
+        "usable": false
+      }
+    },
+    "selected": "B_worktree_plus_ro_common",
+    "usable_and_safe": [
+      "B_worktree_plus_ro_common"
+    ]
+  },
+  "image": {
+    "digest": "sha256:be853a7aef8818aead0c3ca9f57f6a00a8f16d3b7f9aaf4676023d96d125c92e",
+    "reference": "project-claude:p3"
+  },
+  "network": {
+    "detail": "true\tbridge",
+    "error": "",
+    "internal": true,
+    "name": "project-p3-internal",
+    "ok": true
+  },
+  "persistence_control": {
+    "checks": {
+      "a_bootstrapped_credential": true,
+      "a_could_not_write_the_seed": true,
+      "a_could_write_its_own_home": true,
+      "b_bootstrapped_credential": true,
+      "container_a_ran": true,
+      "container_b_ran": true,
+      "no_arbitrary_state_survived": true,
+      "seed_has_no_injected_file": true,
+      "seed_unchanged_on_host": true
+    },
+    "container_a": {
+      "home": "/home/claude",
+      "home_has_credential": true,
+      "seed": {
+        "create": "OSError: [Errno 30] Read-only file system: '/run/project-auth-seed/INJECTED.txt'",
+        "listing": [
+          ".credentials.json"
+        ],
+        "overwrite": "OSError: [Errno 30] Read-only file system: '/run/project-auth-seed/.credentials.json'"
+      },
+      "wrote": {
+        ".bashrc-injected": true,
+        ".cache/ARBITRARY-A.txt": true,
+        ".claude/ARBITRARY-A.txt": true,
+        ".config/ARBITRARY-A.txt": true,
+        ".local/ARBITRARY-A.txt": true,
+        "ARBITRARY-A.txt": true
+      }
+    },
+    "container_b": {
+      "any_leaked": false,
+      "home_has_credential": true,
+      "home_listing": [
+        ".claude"
+      ],
+      "leaked": {
+        ".bashrc-injected": false,
+        ".cache/ARBITRARY-A.txt": false,
+        ".claude/ARBITRARY-A.txt": false,
+        ".config/ARBITRARY-A.txt": false,
+        ".local/ARBITRARY-A.txt": false,
+        "ARBITRARY-A.txt": false
+      },
+      "seed_has_injected": false,
+      "seed_listing": [
+        ".credentials.json"
+      ]
+    },
+    "failed": [],
+    "seed_after": {
+      "algorithm": "sha256",
+      "at": 0.0,
+      "class": "DIRECTORY_BYTES",
+      "detail": {},
+      "digest": "6bc91246bf25aa951f689ec0b09a50d08b70ad84208b19cfd015f458346741d0",
+      "error": null,
+      "exclusions": [],
+      "inputs": "path + sha256 of every file in the project-claude-auth-seed volume",
+      "inspected_count": 1,
+      "instrument": "fingerprints/1",
+      "ok": true,
+      "run_id": null,
+      "scope": "path AND bytes of every file beneath a directory",
+      "source_revision": null
+    },
+    "seed_before": {
+      "algorithm": "sha256",
+      "at": 0.0,
+      "class": "DIRECTORY_BYTES",
+      "detail": {},
+      "digest": "6bc91246bf25aa951f689ec0b09a50d08b70ad84208b19cfd015f458346741d0",
+      "error": null,
+      "exclusions": [],
+      "inputs": "path + sha256 of every file in the project-claude-auth-seed volume",
+      "inspected_count": 1,
+      "instrument": "fingerprints/1",
+      "ok": true,
+      "run_id": null,
+      "scope": "path AND bytes of every file beneath a directory",
+      "source_revision": null
+    }
+  },
+  "prefix_tests": {
+    "argv_identity": "088e7a5300db10202a7f8b464ac58e4024e7bb074d01ca410c4831cada59fdc3",
+    "collector_version": "test_collector/1",
+    "container_id": "",
+    "cwd_identity": "C:/project-p3\\semver-fixture",
+    "detail": {
+      "parsed": {
+        "discovered": 6,
+        "errors": 0,
+        "failed": 2,
+        "passed": 4,
+        "runtime_s": 0.001,
+        "skipped": 0,
+        "status": "FAILED"
+      },
+      "profile": {
+        "argv": [
+          "C:\\Python314\\python.exe",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-p",
+          "test_*.py"
+        ],
+        "argv_identity": "088e7a5300db10202a7f8b464ac58e4024e7bb074d01ca410c4831cada59fdc3",
+        "collector_version": "test_collector/1",
+        "cwd_policy": "workspace",
+        "expected_floor": 5,
+        "note": "bridge-owned; selected by id, never supplied by the child",
+        "profile_id": "fixture-unittest",
+        "runner": "host",
+        "timeout_s": 180.0
+      }
+    },
+    "discovered": 6,
+    "errors": 0,
+    "exit_code": 1,
+    "failed": 2,
+    "finished_at": 1786635021.8142612,
+    "passed": 4,
+    "process_executed": true,
+    "process_outcome": "LAUNCHED",
+    "profile_id": "fixture-unittest",
+    "reason": "the suite reported failures/errors",
+    "run_id": "prefix",
+    "skipped": 0,
+    "started_at": 1786635021.7220502,
+    "stderr_digest": "dcae9ec2aa8a1770dcd2c3f51f97fd338cb20a8d0a70ae6cf53478d55465be2f",
+    "stderr_path": "C:\\Users\\user\\Documents\\GitHub\\platform\\var\\p3\\tests-prefix-err.log",
+    "stdout_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_path": "C:\\Users\\user\\Documents\\GitHub\\platform\\var\\p3\\tests-prefix-out.log",
+    "test_verdict": "FAIL",
+    "timeout_s": 180.0
+  },
+  "profile": {
+    "digest": "e2fe5d4f2ec2d3f6a795e6cca746a1965893679f920c2d0b51d61e10b97d5985",
+    "profile": {
+      "autoremove": false,
+      "cap_add": [],
+      "cap_drop": [
+        "ALL"
+      ],
+      "claude_authority_profile": "STANDARD_EDIT_CONFINED",
+      "cpus": "2",
+      "env_allowlist": [],
+      "image_digest": "sha256:be853a7aef8818aead0c3ca9f57f6a00a8f16d3b7f9aaf4676023d96d125c92e",
+      "image_ref": "project-claude:p3",
+      "instrument": "container_profile/1",
+      "ipc_mode": "",
+      "memory": "2g",
+      "mounts": [
+        {
+          "container_path": "/workspace",
+          "host_path": "c:/project-p3/semver-fixture",
+          "kind": "bind",
+          "mode": "rw",
+          "options": ""
+        },
+        {
+          "container_path": "/run/project-auth-seed",
+          "host_path": "project-claude-auth-seed",
+          "kind": "volume",
+          "mode": "ro",
+          "options": ""
+        },
+        {
+          "container_path": "/home/claude",
+          "host_path": "",
+          "kind": "tmpfs",
+          "mode": "rw",
+          "options": "rw,nosuid,size=512m,uid=1001,gid=1001,mode=0700"
+        },
+        {
+          "container_path": "/tmp",
+          "host_path": "",
+          "kind": "tmpfs",
+          "mode": "rw",
+          "options": "rw,nosuid,size=256m,uid=1001,gid=1001"
+        }
+      ],
+      "network": "project-p3-internal",
+      "pid_mode": "",
+      "pids_limit": 512,
+      "privileged": false,
+      "profile_id": "p3-confined-write",
+      "read_only_rootfs": true,
+      "security_opt": [
+        "no-new-privileges"
+      ],
+      "timeout_s": 900.0,
+      "user": "1001:1001",
+      "workdir": "/workspace"
+    },
+    "reasons": [],
+    "verdict": "CONTAINER_POLICY_OK"
+  },
+  "replay": {
+    "checks": {
+      "no_new_container": true,
+      "no_new_mutation": true,
+      "no_new_worker_spawned": true,
+      "returned_duplicate": true,
+      "same_run_returned": true,
+      "session_id_unchanged": true
+    },
+    "detail": {
+      "detail": "an execution for this dispatch key already exists; returning it rather than starting a second one",
+      "outcome": "DUPLICATE",
+      "reason": "DUPLICATE_DISPATCH_KEY",
+      "returned_run_id": "11c7cccd-3b62-4d44-b76b-bdde66bab9fc",
+      "session_id": "268b8eab-e106-407e-ab9f-0ae98f6a4200",
+      "workspace_digest_after": "8287c6c815404ef00d0e0077bf60e167ce9f61f5b31b2fe121b03b2547e67348",
+      "workspace_digest_before": "8287c6c815404ef00d0e0077bf60e167ce9f61f5b31b2fe121b03b2547e67348"
+    },
+    "failed": [],
+    "original_dispatch_key": "bea1b00a687baa7ce6edd592ce46e68ebd624aaf97c8a717effcb82b304ae59e",
+    "original_run_id": "11c7cccd-3b62-4d44-b76b-bdde66bab9fc"
+  },
+  "verification": {
+    "checks": {
+      "authority_profile_confined": true,
+      "container_started": true,
+      "dispatched_through_real_pipeline": true,
+      "engine_confirmed_profile": true,
+      "evidence_floor_met": true,
+      "handoff_valid": true,
+      "head_unchanged_no_commit": true,
+      "mutations_inside_workspace_only": true,
+      "non_vacuous_discovery": true,
+      "postfix_suite_passed": true,
+      "prefix_suite_failed": true,
+      "reached_handoff_ready": true,
+      "source_actually_changed": true,
+      "test_claim_agrees": true,
+      "test_process_executed": true,
+      "worker_evidence_ok": true
+    },
+    "container": {
+      "actual_reasons": [],
+      "actual_verdict": "CONTAINER_POLICY_OK",
+      "container_id": "41b4684422bd",
+      "created": true,
+      "error": "",
+      "exit_code": 0,
+      "profile_verdict": "CONTAINER_POLICY_OK",
+      "removed": true,
+      "started": true,
+      "timed_out": false
+    },
+    "dispatch_key": "bea1b00a687baa7ce6edd592ce46e68ebd624aaf97c8a717effcb82b304ae59e",
+    "egress_mode": "enforce",
+    "egress_policy_version": "p3-egress-1",
+    "execution_state": "HANDOFF_READY",
+    "failed_checks": [
+      "replay:no_new_mutation"
+    ],
+    "handoff": {
+      "claimed_files_changed": [
+        "src/semver.py"
+      ],
+      "outcome": "VALID",
+      "program_verdict": "PASS",
+      "prompt_disposition": "COMPLETE"
+    },
+    "image_digest": "sha256:be853a7aef8818aead0c3ca9f57f6a00a8f16d3b7f9aaf4676023d96d125c92e",
+    "lease": {
+      "acquired_at": 1786635028.4561417,
+      "epoch": 2,
+      "expected_branch": "main",
+      "expected_head": "fb6e3621d63b9ffad54ef0428fc1f222536a71d2",
+      "heartbeat_at": 1786635028.4561417,
+      "holder_run_id": "11c7cccd-3b62-4d44-b76b-bdde66bab9fc",
+      "lease_id": "85ea0cd7-70f8-41bc-9928-116210b04c74",
+      "release_reason": "worker finished",
+      "released_at": 1786635069.7776,
+      "repo_id": "local:c707c12af7101c64",
+      "worktree_path": "c:/project-p3/semver-fixture"
+    },
+    "measured_facts": {
+      "root_cause": "version segments compared as strings, not numerically",
+      "tests_verdict": "PASS"
+    },
+    "mutation": {
+      "changed_paths": [
+        "src/__pycache__/semver.cpython-311.pyc",
+        "src/__pycache__/semver.cpython-314.pyc",
+        "src/semver.py",
+        "tests/__pycache__/test_semver.cpython-311.pyc",
+        "tests/__pycache__/test_semver.cpython-314.pyc"
+      ],
+      "content_fp_after": {
+        "algorithm": "sha256",
+        "at": 0.0,
+        "class": "TRACKED_CONTENT",
+        "detail": {},
+        "digest": "1be02b85bba869630414fd83a02c7d0822dd569a01d83ecf9415e4ad073e1634",
+        "error": null,
+        "exclusions": [],
+        "inputs": "git rev-parse HEAD + git diff HEAD --binary: HEAD plus every tracked WORKING-TREE byte that differs from it",
+        "inspected_count": 3,
+        "instrument": "fingerprints/1",
+        "ok": true,
+        "run_id": "239fc8a836fa49ad99aeeeead4802d8a",
+        "scope": "the bytes of tracked files, via git's own object ids; NOT untracked files",
+        "source_revision": "fb6e3621d63b9ffad54ef0428fc1f222536a71d2"
+      },
+      "head_after": "fb6e3621d63b9ffad54ef0428fc1f222536a71d2",
+      "head_before": "fb6e3621d63b9ffad54ef0428fc1f222536a71d2",
+      "workspace_fp_after": {
+        "algorithm": "sha256",
+        "at": 0.0,
+        "class": "DIRECTORY_BYTES",
+        "detail": {},
+        "digest": "b9c7c56386905b197a628dd2420c71b8dd23e5f24d14dd4a54d50a93fc89cc35",
+        "error": null,
+        "exclusions": [
+          ".git"
+        ],
+        "inputs": "path AND sha256 of RAW bytes for every file beneath C:/project-p3\\semver-fixture (symlinks by target, not followed)",
+        "inspected_count": 7,
+        "instrument": "fingerprints/1",
+        "ok": true,
+        "run_id": "239fc8a836fa49ad99aeeeead4802d8a",
+        "scope": "path AND bytes of every file beneath a directory",
+        "source_revision": null
+      },
+      "workspace_fp_before": {
+        "algorithm": "sha256",
+        "at": 0.0,
+        "class": "DIRECTORY_BYTES",
+        "detail": {},
+        "digest": "69c24a2a9e30d3f06cdab8288e91f447e04991472c82f2f548aed954675dcdf4",
+        "error": null,
+        "exclusions": [
+          ".git"
+        ],
+        "inputs": "path AND sha256 of RAW bytes for every file beneath C:/project-p3\\semver-fixture (symlinks by target, not followed)",
+        "inspected_count": 3,
+        "instrument": "fingerprints/1",
+        "ok": true,
+        "run_id": "239fc8a836fa49ad99aeeeead4802d8a",
+        "scope": "path AND bytes of every file beneath a directory",
+        "source_revision": null
+      }
+    },
+    "profile_digest": "e2fe5d4f2ec2d3f6a795e6cca746a1965893679f920c2d0b51d61e10b97d5985",
+    "run_id": "11c7cccd-3b62-4d44-b76b-bdde66bab9fc",
+    "session_id": "268b8eab-e106-407e-ab9f-0ae98f6a4200",
+    "tests": {
+      "claim": {
+        "agree": true,
+        "authority": "independent collector",
+        "claimed": "PASS",
+        "measured": "PASS",
+        "note": "the collector's verdict is the evidence; the child's is a claim. A disagreement is recorded and fails the run -- it is never averaged, reconciled, or resolved in the claim's favour."
+      },
+      "floor": {
+        "derivation": {
+          "derivation_inputs": {
+            "host_file_count": 3
+          },
+          "derivation_method": "CONTAINER_WORKSPACE_INVENTORY",
+          "derived_at": 1786635021.5745509,
+          "derived_by": "bridge",
+          "floor_value": 3,
+          "instrument_version": "floors/1",
+          "note": "derived from the HOST fixture before the container started",
+          "source_digest": "69c24a2a9e30d3f06cdab8288e91f447e04991472c82f2f548aed954675dcdf4",
+          "source_revision": null
+        },
+        "reason": "",
+        "verdict": "FLOOR_MET"
+      },
+      "postfix": {
+        "argv_identity": "088e7a5300db10202a7f8b464ac58e4024e7bb074d01ca410c4831cada59fdc3",
+        "collector_version": "test_collector/1",
+        "container_id": "",
+        "cwd_identity": "C:/project-p3\\semver-fixture",
+        "detail": {
+          "parsed": {
+            "discovered": 6,
+            "errors": 0,
+            "failed": 0,
+            "passed": 6,
+            "runtime_s": 0.0,
+            "skipped": 0,
+            "status": "OK"
+          },
+          "profile": {
+            "argv": [
+              "C:\\Python314\\python.exe",
+              "-m",
+              "unittest",
+              "discover",
+              "-s",
+              "tests",
+              "-p",
+              "test_*.py"
+            ],
+            "argv_identity": "088e7a5300db10202a7f8b464ac58e4024e7bb074d01ca410c4831cada59fdc3",
+            "collector_version": "test_collector/1",
+            "cwd_policy": "workspace",
+            "expected_floor": 5,
+            "note": "bridge-owned; selected by id, never supplied by the child",
+            "profile_id": "fixture-unittest",
+            "runner": "host",
+            "timeout_s": 180.0
+          }
+        },
+        "discovered": 6,
+        "errors": 0,
+        "exit_code": 0,
+        "failed": 0,
+        "finished_at": 1786635070.8704627,
+        "passed": 6,
+        "process_executed": true,
+        "process_outcome": "LAUNCHED",
+        "profile_id": "fixture-unittest",
+        "reason": "",
+        "run_id": "postfix",
+        "skipped": 0,
+        "started_at": 1786635070.7227907,
+        "stderr_digest": "b952dcfedeb098924df82657c0a7eaafc54599572fb5786304cccc5bc23a2a67",
+        "stderr_path": "C:\\Users\\user\\Documents\\GitHub\\platform\\var\\p3\\tests-postfix-err.log",
+        "stdout_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "C:\\Users\\user\\Documents\\GitHub\\platform\\var\\p3\\tests-postfix-out.log",
+        "test_verdict": "PASS",
+        "timeout_s": 180.0
+      },
+      "prefix": {
+        "argv_identity": "088e7a5300db10202a7f8b464ac58e4024e7bb074d01ca410c4831cada59fdc3",
+        "collector_version": "test_collector/1",
+        "container_id": "",
+        "cwd_identity": "C:/project-p3\\semver-fixture",
+        "detail": {
+          "parsed": {
+            "discovered": 6,
+            "errors": 0,
+            "failed": 2,
+            "passed": 4,
+            "runtime_s": 0.001,
+            "skipped": 0,
+            "status": "FAILED"
+          },
+          "profile": {
+            "argv": [
+              "C:\\Python314\\python.exe",
+              "-m",
+              "unittest",
+              "discover",
+              "-s",
+              "tests",
+              "-p",
+              "test_*.py"
+            ],
+            "argv_identity": "088e7a5300db10202a7f8b464ac58e4024e7bb074d01ca410c4831cada59fdc3",
+            "collector_version": "test_collector/1",
+            "cwd_policy": "workspace",
+            "expected_floor": 5,
+            "note": "bridge-owned; selected by id, never supplied by the child",
+            "profile_id": "fixture-unittest",
+            "runner": "host",
+            "timeout_s": 180.0
+          }
+        },
+        "discovered": 6,
+        "errors": 0,
+        "exit_code": 1,
+        "failed": 2,
+        "finished_at": 1786635021.8142612,
+        "passed": 4,
+        "process_executed": true,
+        "process_outcome": "LAUNCHED",
+        "profile_id": "fixture-unittest",
+        "reason": "the suite reported failures/errors",
+        "run_id": "prefix",
+        "skipped": 0,
+        "started_at": 1786635021.7220502,
+        "stderr_digest": "dcae9ec2aa8a1770dcd2c3f51f97fd338cb20a8d0a70ae6cf53478d55465be2f",
+        "stderr_path": "C:\\Users\\user\\Documents\\GitHub\\platform\\var\\p3\\tests-prefix-err.log",
+        "stdout_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "C:\\Users\\user\\Documents\\GitHub\\platform\\var\\p3\\tests-prefix-out.log",
+        "test_verdict": "FAIL",
+        "timeout_s": 180.0
+      }
+    }
+  }
+}

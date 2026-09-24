@@ -1,0 +1,11 @@
+# Git hooks and shell scripts are executed by Git Bash, which cannot run a script
+# whose shebang line ends in CR: `#!/bin/sh` resolves to a nonexistent
+# interpreter and dies with "bad interpreter: No such file or directory".
+#
+# This matters most for .beads/hooks/*, which are version-controlled and run on
+# every commit: with core.autocrlf=true a fresh clone would check them out with
+# CRLF and they would fail OPEN -- exiting before doing anything, with nothing
+# announcing that beads had stopped running.
+*.sh            text eol=lf
+*.py            text eol=lf
+.beads/hooks/*  text eol=lf

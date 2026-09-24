@@ -1,0 +1,59 @@
+# Runtime state. The database is the system of record for a live control plane, but it is
+# machine-local: committing it would publish run history and make two checkouts disagree about
+# which executions exist.
+var/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Third-party binaries fetched for transport qualification are never re-published from here.
+vendor/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+
+# Editor workspace files are per-developer.
+*.code-workspace
+
+# The maintainer's private working set, kept on disk and never published: the issue tracker and
+# its generated report, per-agent instruction files and settings, and internal audit records.
+.beads/
+docs/reports/
+.claude/
+.codex/
+.agents/
+AGENTS.md
+CLAUDE.md
+GAUNTLET_AUDIT_REPORT.md
+# Design history and working notes: the product contracts docs/PRD.md merged and supersedes, a
+# study of a repository shared for reading only, implementation plans, tool-evaluation notes,
+# and the maintainer's Obsidian vault settings.
+docs/QUAESTOR_PLATFORM_AND_DATA_ARCHITECTURE_ORCHESTRATION_REVISED.md
+docs/QUAESTOR_PRODUCT_DIRECTION.md
+docs/QUAESTOR_RELAY_ARCHITECTURE.md
+docs/ROSEN-BRIDGE-CROSS-EXAMINATION.md
+docs/graphify-runbook-findings.md
+docs/superpowers/
+docs/upstream/
+docs/.obsidian/
+
+# Build artefacts from `pip install -e .`
+*.egg-info/
+
+# it would otherwise dominate every diff -- graph.json alone is 6.6 MB.
+# The Obsidian export: thousands of generated notes describing the code, plus its
+# core-plugins) is shared vault configuration and IS committed -- app.json in
+# particular carries userIgnoreFilters: ["graph/"], which keeps Obsidian's own
+# search and graph view from being swamped by the thousands of generated notes.
+
+# Per-user Obsidian view state. The rest of docs/.obsidian/ (app, appearance,
+# core-plugins) is shared vault configuration and IS committed.
+docs/.obsidian/workspace.json
+docs/.obsidian/graph.json

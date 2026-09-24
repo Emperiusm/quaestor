@@ -1,0 +1,136 @@
+# CI -- what this matrix is defending against.
+#
+# The suite shells out to REAL git and spawns REAL subprocesses and containers, so two classes of
+# regression are invisible on a single developer machine:
+#
+#   * OS SEMANTICS. Path handling, worktree exclusion, process spawn and file locking differ
+#     between Windows and POSIX, and this repository has already shipped a worktree-exclusion bug
+#     that only one platform could see.
+#   * INTERPRETER DRIFT. Development happens on a newer interpreter than most installs will use,
+#     so 3.12 and 3.13 are both measured. 3.14 is deliberately NOT pinned here: a version a runner
+#     cannot provide makes the job fail to START rather than fail a test, and a job that silently
+#     never runs is worse than no job at all. Add it only after confirming the runners have it.
+#
+# RUNNERS. GitHub-hosted ubuntu-latest. PLATFORM COVERAGE IS LINUX-ONLY, stated rather than
+# hidden: the live docker controls build and run a Linux image, which a Windows runner cannot do.
+# Windows semantics are measured on a developer machine until a Windows leg that skips the live
+# docker controls is added.
+#
+# The fast job exists because the full suite is too long to learn a commit is broken. It runs only
+# the suites that touch no subprocess and no git, so an obvious break is named in about a minute
+# and the long matrix becomes confirmation rather than first notice.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Only the newest commit's verdict is the one anyone acts on.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    name: fast (no subprocess, no git)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # PACKAGING FALLBACK, stated rather than assumed.
+      # pyproject.toml now exists, so the first branch is the live one. The second branch stays
+      # because a checkout without packaging -- an older commit, a bisect -- must still run the
+      # suite; it puts src/ on the path the same way bin/quaestor does, and SAYS SO in the log
+      # rather than passing silently. The fallback is keyed on the FILE'S ABSENCE, never on the
+      # install failing: where pyproject.toml exists, a broken `pip install -e .` is a RED job,
+      # not a quiet PYTHONPATH rescue. For the same reason PYTHONPATH is not set unconditionally
+      # -- that would mask an install that installed nothing.
+      #
+      # The --help call is the only thing in this workflow that measures the INSTALL. It cannot
+      # be left to the suite: every test module inserts src/ into sys.path itself, so the whole
+      # suite would pass over completely broken packaging. This runs the documented invocation
+      # and the console script from the checkout root, where nothing but the install can satisfy
+      # them.
+      - name: Install
+        shell: bash
+        run: |
+          if [ -f pyproject.toml ]; then
+            python -m pip install --upgrade pip
+            python -m pip install -e .
+            python -m quaestor.transports.cli --help > /dev/null
+            quaestor --help > /dev/null
+          else
+            echo "ABSENT: pyproject.toml -- no installable package yet; running from src/ via PYTHONPATH."
+            echo "PYTHONPATH=${{ github.workspace }}/src" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pure suites
+        run: >-
+          python -m unittest
+          tests.test_platform_controls
+          tests.test_openrouter_provider
+          tests.test_browser_transport
+          tests.test_chatgpt_web_adapter
+
+  suite:
+    name: suite (linux, py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      # One interpreter's failure must not delete the other interpreter's answer.
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Same packaging fallback and same install proof as the fast job; see the comment there for
+      # why it is keyed on the file's absence.
+      - name: Install
+        shell: bash
+        run: |
+          if [ -f pyproject.toml ]; then
+            python -m pip install --upgrade pip
+            python -m pip install -e .
+            python -m quaestor.transports.cli --help > /dev/null
+            quaestor --help > /dev/null
+          else
+            echo "ABSENT: pyproject.toml -- no installable package yet; running from src/ via PYTHONPATH."
+            echo "PYTHONPATH=${{ github.workspace }}/src" >> "$GITHUB_ENV"
+          fi
+
+      - name: Git identity
+        # Fixture repositories set their own user.name/user.email per repo, but a runner with no
+        # global identity at all still trips some git operations. Stated once, here.
+        run: |
+          git config --global user.email "ci@quaestor.invalid"
+          git config --global user.name "Quaestor CI"
+          git config --global init.defaultBranch main
+
+      - name: Build the live-control image
+        # The P3 live controls (container crash + reconciliation) run REAL containers. The image
+        # is BUILT here rather than assumed: a control that needs a pre-provisioned image already
+        # states exactly which reference it looked for (support.test_image, override with
+        # QUAESTOR_TEST_IMAGE_P3); CI provisions that reference instead of skipping the control.
+        run: docker build -t quaestor-claude:p3 docker
+
+      # The whole suite. `discover` rather than run_tests.py, because the gate's hand-written
+      # EXPECTED_MODULES list is a floor -- discovery is the superset, so a module added to tests/
+      # cannot go unmeasured here by being forgotten in a list.
+      - name: Full suite
+        run: python -m unittest discover --start-directory tests --top-level-directory .
