@@ -806,6 +806,21 @@ REQUIRED_CONTROLS.update({
          "Core read surface fails permanently on a store the writing open reads fine, with the "
          "paired negative that a drive path does NOT gain those slashes. Asserted on the URI "
          "the code builds, never on one the test rebuilds (bd quaestor-mpp)",
+    # -- the observation gate reads EVERY ref, not just @{upstream} (bd quaestor-q00) ----------
+    387: "a real push is OBSERVED whichever ref it lands on -- with no tracking configuration, "
+         "to a second real remote, to a ref the branch does not track, as a delete-push, and of "
+         "a commit that is not a local ref tip -- the delta and the sentence the Orchestrator "
+         "reads both say so, and the same two readings minus the ref store still classify "
+         "READ_ONLY, so the control measures the blind spot rather than describing it "
+         "(bd quaestor-q00)",
+    388: "the wider reading fails CLOSED and stays quiet: a REAL failed for-each-ref sets the "
+         "flag the whole contract reads, an unreadable ref store refuses as UNMEASURABLE from "
+         "either side and against a pre-upgrade snapshot too, a repository with no remotes is "
+         "not a failed read, a snapshot from before the reading falls back rather than inventing "
+         "a push -- and the ordinary acts stay ordinary: a real git fetch is not a push, a "
+         "lightweight tag and git checkout -b are not commits, an annotated tag is, and the "
+         "unread-ref-store caveat is carried on the busy sentence as well as the quiet one "
+         "(bd quaestor-q00)",
 })
 
 
